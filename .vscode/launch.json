@@ -1,0 +1,630 @@
+COPIÁ Y PEGÁ TODO ESTO EN VS CODE (creá los archivos EXACTOS como están en los separadores)
+------------------------------------------------------------
+/styles.css
+------------------------------------------------------------
+:root{
+  --bg:#070B14;
+  --panel:#0B1224;
+  --panel2:#0A1020;
+  --text:#EAF2FF;
+  --muted:#A8B7D4;
+  --line:rgba(63,209,255,.18);
+  --c1:#3FD1FF;
+  --c2:#A66CFF;
+  --c3:#6CFFB9;
+  --r:18px;
+  --max:1180px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  background: radial-gradient(900px 600px at 20% 10%, rgba(63,209,255,.10), transparent 60%),
+              radial-gradient(900px 600px at 85% 15%, rgba(166,108,255,.12), transparent 55%),
+              var(--bg);
+  color:var(--text);
+}
+a{color:inherit;text-decoration:none}
+.container{max-width:var(--max);margin:0 auto;padding:0 18px}
+.muted{color:var(--muted)}
+.hr{height:1px;background:var(--line);border:0;margin:18px 0}
+.bg{
+  position:fixed;inset:-40%;
+  background:
+    radial-gradient(circle at 30% 25%, rgba(63,209,255,.08), transparent 45%),
+    radial-gradient(circle at 70% 30%, rgba(166,108,255,.10), transparent 45%),
+    radial-gradient(circle at 55% 80%, rgba(108,255,185,.06), transparent 45%);
+  filter: blur(30px);
+  z-index:-1;
+}
+.nav{
+  position:sticky;top:0;z-index:20;
+  backdrop-filter: blur(10px);
+  background: rgba(7,11,20,.55);
+  border-bottom:1px solid var(--line);
+}
+.nav-inner{
+  height:72px;display:flex;align-items:center;justify-content:space-between;gap:14px;
+}
+.brand{display:flex;align-items:center;gap:10px}
+.logo{width:38px;height:38px;border-radius:12px;object-fit:cover}
+.logo.sm{width:30px;height:30px;border-radius:10px}
+.brand-text{
+  font-weight:800;letter-spacing:.5px;
+  background:linear-gradient(90deg,var(--c1),var(--c2));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.menu{display:flex;align-items:center;gap:18px}
+.menu a{color:var(--muted);padding:8px 10px;border-radius:12px}
+.menu a.active{color:var(--text);background:rgba(63,209,255,.08);border:1px solid rgba(63,209,255,.15)}
+.menu a:hover{color:var(--text)}
+.menu a.cta{
+  color:var(--text);
+  background:linear-gradient(135deg, rgba(63,209,255,.16), rgba(166,108,255,.18));
+  border:1px solid rgba(166,108,255,.22);
+}
+.burger{display:none;background:transparent;border:0;color:var(--text);padding:10px;border-radius:14px}
+.burger span{display:block;width:22px;height:2px;background:var(--text);margin:4px 0;opacity:.9}
+.mobile{display:none;border-top:1px solid var(--line);background:rgba(7,11,20,.72)}
+.mobile-inner{display:flex;flex-direction:column;gap:10px;padding:14px 18px}
+.mobile a{color:var(--muted);padding:10px 12px;border-radius:14px;border:1px solid rgba(255,255,255,.06)}
+.mobile a.btn{border:0}
+@media (max-width: 900px){
+  .menu{display:none}
+  .burger{display:block}
+}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:10px;
+  padding:12px 14px;border-radius:14px;border:1px solid rgba(255,255,255,.10);
+  font-weight:700;
+}
+.btn.primary{
+  border:0;
+  background:linear-gradient(135deg, rgba(63,209,255,.95), rgba(166,108,255,.95));
+  color:#071018;
+}
+.btn.ghost{background:rgba(255,255,255,.04)}
+.btn.secondary{
+  background:linear-gradient(135deg, rgba(63,209,255,.10), rgba(166,108,255,.10));
+  border:1px solid rgba(255,255,255,.10);
+}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.page{padding:34px 0 70px}
+.hero{padding:36px 0 18px}
+.hero-grid{display:grid;grid-template-columns: 1.15fr .85fr;gap:22px;align-items:stretch}
+@media (max-width: 900px){ .hero-grid{grid-template-columns:1fr} }
+.card{
+  background:linear-gradient(180deg, rgba(11,18,36,.92), rgba(10,16,32,.88));
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:var(--r);
+  box-shadow: 0 20px 70px rgba(0,0,0,.35);
+  padding:18px;
+  position:relative;
+  overflow:hidden;
+}
+.card::before{
+  content:"";position:absolute;inset:-2px;
+  background:linear-gradient(135deg, rgba(63,209,255,.16), rgba(166,108,255,.14), rgba(108,255,185,.10));
+  filter: blur(22px);
+  opacity:.75;
+}
+.card > *{position:relative}
+.h1{font-size:44px;line-height:1.05;margin:0 0 10px}
+@media (max-width: 520px){ .h1{font-size:36px} }
+.lead{color:var(--muted);font-size:16.5px;line-height:1.6;margin:0 0 16px}
+.pill{
+  display:inline-flex;gap:8px;align-items:center;
+  padding:8px 10px;border-radius:999px;
+  border:1px solid rgba(63,209,255,.18);
+  background:rgba(63,209,255,.07);
+  color:var(--text);
+  font-weight:700;
+  margin-bottom:12px;
+}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+@media (max-width: 900px){ .grid-3,.grid-2{grid-template-columns:1fr} }
+.feature{
+  background:rgba(255,255,255,.03);
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:var(--r);
+  padding:16px;
+}
+.feature h3{margin:0 0 8px}
+.feature p{margin:0;color:var(--muted);line-height:1.55}
+.section-title{font-size:22px;margin:0 0 12px}
+.section-sub{margin:0 0 18px;color:var(--muted);line-height:1.55}
+.badges{display:flex;flex-wrap:wrap;gap:10px}
+.badge{
+  padding:9px 12px;border-radius:999px;
+  border:1px solid rgba(255,255,255,.10);
+  background:rgba(255,255,255,.03);
+  color:var(--muted);
+}
+.table{
+  width:100%;
+  border-collapse:separate;border-spacing:0;
+  overflow:hidden;border-radius:16px;
+  border:1px solid rgba(255,255,255,.08);
+}
+.table th,.table td{padding:12px 12px;border-bottom:1px solid rgba(255,255,255,.08)}
+.table th{color:var(--muted);text-align:left;background:rgba(255,255,255,.03)}
+.table tr:last-child td{border-bottom:0}
+.footer{border-top:1px solid var(--line);padding:26px 0;background:rgba(7,11,20,.6)}
+.footer-grid{display:grid;grid-template-columns: 1.2fr .6fr .6fr;gap:16px}
+@media (max-width: 900px){ .footer-grid{grid-template-columns:1fr} }
+.footer-brand{display:flex;gap:10px;align-items:center;margin-bottom:8px}
+.footer-title{font-weight:900}
+.footer-sub{color:var(--muted);font-weight:700}
+.footer-col{display:flex;flex-direction:column;gap:8px}
+.footer-h{color:var(--muted);font-weight:800;margin-bottom:4px}
+.footer-col a{color:var(--muted)}
+.footer-col a:hover{color:var(--text)}
+.footer-bottom{display:flex;justify-content:space-between;gap:12px;padding-top:14px}
+@media (max-width: 600px){ .footer-bottom{flex-direction:column} }
+input,textarea{
+  width:100%;
+  padding:12px;
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,.10);
+  background:rgba(0,0,0,.25);
+  color:var(--text);
+  outline:none;
+}
+label .muted{display:block;font-weight:800;margin-bottom:6px}
+
+------------------------------------------------------------
+/app.js
+------------------------------------------------------------
+async function injectPartials(){
+  const headerEl = document.querySelector("[data-include='header']");
+  const footerEl = document.querySelector("[data-include='footer']");
+
+  if (headerEl){
+    const res = await fetch("partials/header.html");
+    headerEl.innerHTML = await res.text();
+  }
+  if (footerEl){
+    const res = await fetch("partials/footer.html");
+    footerEl.innerHTML = await res.text();
+  }
+
+  const burger = document.querySelector("[data-burger]");
+  const mobile = document.querySelector("[data-mobile]");
+  if (burger && mobile){
+    burger.addEventListener("click", () => {
+      const open = mobile.style.display === "block";
+      mobile.style.display = open ? "none" : "block";
+    });
+  }
+
+  const path = location.pathname.split("/").pop() || "index.html";
+  document.querySelectorAll("[data-link]").forEach(a => {
+    const href = a.getAttribute("href");
+    if (href === path) a.classList.add("active");
+  });
+
+  const y = document.getElementById("year");
+  if (y) y.textContent = new Date().getFullYear();
+}
+document.addEventListener("DOMContentLoaded", injectPartials);
+
+------------------------------------------------------------
+/partials/header.html
+------------------------------------------------------------
+<header class="nav">
+  <div class="container nav-inner">
+    <a class="brand" href="index.html">
+      <img class="logo" src="assets/logo.png" alt="Cogniseguros AI"/>
+      <span class="brand-text">COGNISEGUROS AI</span>
+    </a>
+
+    <nav class="menu" data-menu>
+      <a data-link href="index.html">Inicio</a>
+      <a data-link href="empresa.html">Empresa</a>
+      <a data-link href="producto.html">Producto</a>
+      <a data-link href="soluciones.html">Soluciones</a>
+      <a data-link href="recursos.html">Recursos</a>
+      <a data-link href="contacto.html" class="cta">Contacto</a>
+    </nav>
+
+    <button class="burger" data-burger type="button" aria-label="Abrir menú">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+
+  <div class="mobile" data-mobile>
+    <div class="container mobile-inner">
+      <a data-link href="index.html">Inicio</a>
+      <a data-link href="empresa.html">Empresa</a>
+      <a data-link href="producto.html">Producto</a>
+      <a data-link href="soluciones.html">Soluciones</a>
+      <a data-link href="recursos.html">Recursos</a>
+      <a data-link href="contacto.html" class="btn primary">Contacto</a>
+    </div>
+  </div>
+</header>
+
+------------------------------------------------------------
+/partials/footer.html
+------------------------------------------------------------
+<footer class="footer">
+  <div class="container footer-grid">
+    <div>
+      <div class="footer-brand">
+        <img class="logo sm" src="assets/logo.png" alt="Cogniseguros AI"/>
+        <div>
+          <div class="footer-title">COGNISEGUROS AI</div>
+          <div class="footer-sub">Seguros inteligentes</div>
+        </div>
+      </div>
+      <p class="muted">Plataforma y agentes de IA para automatizar operaciones y ventas en seguros.</p>
+    </div>
+
+    <div class="footer-col">
+      <div class="footer-h">Empresa</div>
+      <a href="empresa.html">Quiénes somos</a>
+      <a href="recursos.html">Recursos</a>
+      <a href="contacto.html">Contacto</a>
+    </div>
+
+    <div class="footer-col">
+      <div class="footer-h">Producto</div>
+      <a href="producto.html">Plataforma</a>
+      <a href="soluciones.html">Soluciones</a>
+      <a href="contacto.html">Agendar demo</a>
+    </div>
+  </div>
+
+  <div class="container footer-bottom">
+    <span class="muted">© <span id="year"></span> Cogniseguros AI</span>
+    <span class="muted">Hecho para escalar con IA</span>
+  </div>
+</footer>
+
+------------------------------------------------------------
+/index.html
+------------------------------------------------------------
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Cogniseguros AI — Inicio</title>
+  <meta name="description" content="Cogniseguros AI — Web corporativa."/>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+  <div class="bg"></div>
+  <div data-include="header"></div>
+
+  <main class="page">
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="card">
+          <div class="pill">Empresa</div>
+          <h1 class="h1">Cogniseguros AI</h1>
+          <p class="lead">
+            Somos una empresa que construye software y agentes de IA para el sector seguros:
+            automatización, atención, seguimiento y operación.
+          </p>
+
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <a class="btn primary" href="contacto.html">Contactar</a>
+            <a class="btn ghost" href="producto.html">Ver producto</a>
+          </div>
+
+          <div class="hr"></div>
+
+          <div class="badges">
+            <span class="badge">IA aplicada</span>
+            <span class="badge">Automatizaciones</span>
+            <span class="badge">Integraciones</span>
+            <span class="badge">Seguridad</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-title">Qué hacemos</div>
+          <p class="section-sub">Entregamos soluciones listas para implementar y escalar.</p>
+
+          <div class="grid-2">
+            <div class="feature"><h3>Plataforma</h3><p>Panel, módulos y flujos configurables.</p></div>
+            <div class="feature"><h3>Agentes IA</h3><p>Atención y seguimiento con contexto.</p></div>
+            <div class="feature"><h3>Integraciones</h3><p>CRM, Sheets, bases de datos, APIs.</p></div>
+            <div class="feature"><h3>Implementación</h3><p>Setup, QA, monitoreo y mejora continua.</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="grid-3">
+          <div class="feature">
+            <h3>Para qué sirve</h3>
+            <p>Reducí tareas manuales y aumentá consistencia operativa.</p>
+          </div>
+          <div class="feature">
+            <h3>Cómo se implementa</h3>
+            <p>Relevamiento → configuración → integración → go-live.</p>
+          </div>
+          <div class="feature">
+            <h3>Qué se integra</h3>
+            <p>WhatsApp Cloud API, CRM, n8n/Make, DB.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div data-include="footer"></div>
+  <script src="app.js"></script>
+</body>
+</html>
+
+------------------------------------------------------------
+/empresa.html
+------------------------------------------------------------
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Cogniseguros AI — Empresa</title>
+  <meta name="description" content="Cogniseguros AI — Empresa."/>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+  <div class="bg"></div>
+  <div data-include="header"></div>
+
+  <main class="page">
+    <div class="container">
+      <div class="card">
+        <div class="pill">Empresa</div>
+        <h1 class="h1">Quiénes somos</h1>
+        <p class="lead">
+          Cogniseguros AI diseña e implementa soluciones de IA para seguros con foco en resultados,
+          seguridad y escalabilidad.
+        </p>
+      </div>
+
+      <div style="height:14px"></div>
+
+      <div class="grid-3">
+        <div class="feature"><h3>Misión</h3><p>Escalar operaciones con IA sin perder calidad.</p></div>
+        <div class="feature"><h3>Visión</h3><p>Ser referente en automatización para seguros.</p></div>
+        <div class="feature"><h3>Valores</h3><p>Claridad, velocidad, seguridad, impacto.</p></div>
+      </div>
+
+      <div style="height:14px"></div>
+
+      <div class="card">
+        <div class="section-title">Cómo trabajamos</div>
+        <p class="section-sub">Metodología simple, entregables claros.</p>
+        <table class="table">
+          <thead><tr><th>Etapa</th><th>Resultado</th></tr></thead>
+          <tbody>
+            <tr><td>Relevamiento</td><td>Objetivo + flujo + datos necesarios</td></tr>
+            <tr><td>Implementación</td><td>Agente IA + reglas + métricas</td></tr>
+            <tr><td>Integración</td><td>APIs / CRM / DB</td></tr>
+            <tr><td>Go-live</td><td>Monitoreo + ajustes</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <div data-include="footer"></div>
+  <script src="app.js"></script>
+</body>
+</html>
+
+------------------------------------------------------------
+/producto.html
+------------------------------------------------------------
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Cogniseguros AI — Producto</title>
+  <meta name="description" content="Cogniseguros AI — Producto."/>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+  <div class="bg"></div>
+  <div data-include="header"></div>
+
+  <main class="page">
+    <div class="container">
+      <div class="card">
+        <div class="pill">Producto</div>
+        <h1 class="h1">Plataforma + Agentes</h1>
+        <p class="lead">
+          Módulos configurables para atención, gestión y seguimiento.
+          Integrable con tus sistemas y equipos.
+        </p>
+        <div class="badges">
+          <span class="badge">Atención 24/7</span>
+          <span class="badge">Derivación a humano</span>
+          <span class="badge">Panel y métricas</span>
+          <span class="badge">Automatizaciones</span>
+        </div>
+      </div>
+
+      <div style="height:14px"></div>
+
+      <div class="grid-3">
+        <div class="feature"><h3>Atención</h3><p>FAQ, captura de datos, clasificación.</p></div>
+        <div class="feature"><h3>Automatización</h3><p>Flujos por evento y seguimiento.</p></div>
+        <div class="feature"><h3>Panel</h3><p>Estados, usuarios, auditoría, métricas.</p></div>
+      </div>
+
+      <div style="height:14px"></div>
+
+      <div class="card">
+        <div class="section-title">Integraciones</div>
+        <p class="section-sub">Conectamos lo que ya usás.</p>
+        <div class="badges">
+          <span class="badge">WhatsApp Cloud API</span>
+          <span class="badge">CRM</span>
+          <span class="badge">Google Sheets</span>
+          <span class="badge">SQL Server</span>
+          <span class="badge">n8n / Make</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div data-include="footer"></div>
+  <script src="app.js"></script>
+</body>
+</html>
+
+------------------------------------------------------------
+/soluciones.html
+------------------------------------------------------------
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Cogniseguros AI — Soluciones</title>
+  <meta name="description" content="Cogniseguros AI — Soluciones."/>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+  <div class="bg"></div>
+  <div data-include="header"></div>
+
+  <main class="page">
+    <div class="container">
+      <div class="card">
+        <div class="pill">Soluciones</div>
+        <h1 class="h1">Casos de implementación</h1>
+        <p class="lead">Elegís un flujo, lo adaptamos y lo dejamos operando.</p>
+      </div>
+
+      <div style="height:14px"></div>
+
+      <div class="grid-3">
+        <div class="feature"><h3>Seguimiento</h3><p>Secuencias, recordatorios y cierres.</p></div>
+        <div class="feature"><h3>Renovaciones</h3><p>Alertas, estado, derivación.</p></div>
+        <div class="feature"><h3>Pagos</h3><p>Confirmación, links, estados.</p></div>
+      </div>
+
+      <div style="height:14px"></div>
+
+      <div class="card">
+        <div class="section-title">Entrega típica</div>
+        <table class="table">
+          <thead><tr><th>Fase</th><th>Qué incluye</th></tr></thead>
+          <tbody>
+            <tr><td>1. Relevamiento</td><td>Objetivo + flujo + datos</td></tr>
+            <tr><td>2. Configuración</td><td>Agente + prompts + reglas</td></tr>
+            <tr><td>3. Integración</td><td>APIs / CRM / DB</td></tr>
+            <tr><td>4. Go-live</td><td>Monitoreo + ajustes</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <div data-include="footer"></div>
+  <script src="app.js"></script>
+</body>
+</html>
+
+------------------------------------------------------------
+/recursos.html
+------------------------------------------------------------
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Cogniseguros AI — Recursos</title>
+  <meta name="description" content="Cogniseguros AI — Recursos."/>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+  <div class="bg"></div>
+  <div data-include="header"></div>
+
+  <main class="page">
+    <div class="container">
+      <div class="card">
+        <div class="pill">Recursos</div>
+        <h1 class="h1">Material y novedades</h1>
+        <p class="lead">
+          Documentación, guías y actualizaciones. (Acá después agregamos links reales.)
+        </p>
+      </div>
+
+      <div style="height:14px"></div>
+
+      <div class="grid-3">
+        <div class="feature"><h3>Guías</h3><p>Implementación y buenas prácticas.</p></div>
+        <div class="feature"><h3>Casos</h3><p>Ejemplos y resultados.</p></div>
+        <div class="feature"><h3>FAQ</h3><p>Respuestas rápidas.</p></div>
+      </div>
+    </div>
+  </main>
+
+  <div data-include="footer"></div>
+  <script src="app.js"></script>
+</body>
+</html>
+
+------------------------------------------------------------
+/contacto.html
+------------------------------------------------------------
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Cogniseguros AI — Contacto</title>
+  <meta name="description" content="Cogniseguros AI — Contacto."/>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+  <div class="bg"></div>
+  <div data-include="header"></div>
+
+  <main class="page">
+    <div class="container">
+      <div class="card">
+        <div class="pill">Contacto</div>
+        <h1 class="h1">Hablemos</h1>
+        <p class="lead">Dejá tus datos y te respondemos. (Después conectamos a WhatsApp o backend.)</p>
+
+        <div style="height:10px"></div>
+
+        <form class="grid-2" onsubmit="event.preventDefault(); alert('Enviado (demo). Conectamos esto a tu backend/WhatsApp cuando quieras.');">
+          <label class="feature" style="display:block">
+            <span class="muted">Nombre</span>
+            <input name="name" required placeholder="Tu nombre"/>
+          </label>
+
+          <label class="feature" style="display:block">
+            <span class="muted">Email</span>
+            <input type="email" name="email" required placeholder="tu@email.com"/>
+          </label>
+
+          <label class="feature" style="display:block;grid-column:1/-1">
+            <span class="muted">Mensaje</span>
+            <textarea name="msg" rows="5" required placeholder="Contanos qué necesitás..."></textarea>
+          </label>
+
+          <div style="grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn primary" type="submit">Enviar</button>
+            <a class="btn ghost" href="index.html">Volver</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </main>
+
+  <div data-include="footer"></div>
+  <script src="app.js"></script>
+</body>
+</html>

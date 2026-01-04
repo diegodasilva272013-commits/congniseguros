@@ -1,0 +1,116 @@
+╔════════════════════════════════════════════════════════════════════════╗
+║                  ✅ CHECKLIST DE CONFIGURACIÓN FINAL                   ║
+║                                                                        ║
+║              APP COGNISEGUROS + POSTGRESQL - ENERO 2026               ║
+╚════════════════════════════════════════════════════════════════════════╝
+
+┌─ 📊 ESTADO ACTUAL ─────────────────────────────────────────────────────┐
+│                                                                        │
+│  ✅ Archivos del proyecto: OK                                         │
+│  ✅ package.json: OK                                                   │
+│  ✅ .env configurado: OK                                              │
+│  ✅ server.js: OK                                                      │
+│  ⚠️  PostgreSQL: NO CONECTADO                                         │
+│  ⚠️  Base de datos: NO CREADA                                         │
+│  ⚠️  npm install: NO VERIFICADO                                       │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+
+┌─ 🔧 PASOS PARA TERMINAR ──────────────────────────────────────────────┐
+│                                                                        │
+│  1️⃣  ASEGÚRATE QUE POSTGRESQL ESTÉ CORRIENDO                          │
+│     • Windows: Services → Busca "postgresql"                          │
+│     • O ejecuta: pg_ctl -D "C:\Program Files\PostgreSQL\16\data" start
+│                                                                        │
+│  2️⃣  VERIFICA LA CONTRASEÑA DE POSTGRESQL                             │
+│     • Contraseña esperada: "postgres"                                 │
+│     • Si es diferente, edita el archivo .env                          │
+│     • Variable: DB_PASSWORD=                                          │
+│                                                                        │
+│  3️⃣  INSTALA LAS DEPENDENCIAS (si no está hecho)                      │
+│     npm install                                                        │
+│                                                                        │
+│  4️⃣  CREA LAS TABLAS EN LA BD                                          │
+│     npm run setup-db                                                   │
+│                                                                        │
+│  5️⃣  INICIA LA APP                                                     │
+│     npm run dev-both                                                   │
+│                                                                        │
+│  6️⃣  ACCEDE EN EL NAVEGADOR                                            │
+│     • Frontend: http://localhost:5173                                 │
+│     • Backend:  http://localhost:5000                                 │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+
+┌─ 📝 CREDENCIALES DE PRUEBA ───────────────────────────────────────────┐
+│                                                                        │
+│  Email:    test@test.com                                             │
+│  Password: 123456                                                     │
+│                                                                        │
+│  Email:    admin@test.com                                            │
+│  Password: admin123                                                   │
+│                                                                        │
+│  Nota: Si PostgreSQL no funciona, la app usa modo TEST (en memoria)  │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+
+┌─ 📦 ESTRUCTURA DEL PROYECTO ──────────────────────────────────────────┐
+│                                                                        │
+│  app.js                    → Componentes React fronted               │
+│  server.js                 → Backend Express + PostgreSQL              │
+│  schema.sql                → Estructura de base de datos               │
+│  setup-db.js               → Script para crear tablas                 │
+│  migrate.js                → Script de migraciones                    │
+│  package.json              → Dependencias                             │
+│  .env                      → Configuración de variables               │
+│                                                                        │
+│  src/                      → Frontend React (Vite)                    │
+│  public/                   → Archivos públicos                        │
+│  styles.css                → Estilos globales                         │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+
+┌─ 💾 INFORMACIÓN DE BD ────────────────────────────────────────────────┐
+│                                                                        │
+│  Host:          localhost                                             │
+│  Puerto:        5432                                                  │
+│  Usuario:       postgres                                              │
+│  Contraseña:    postgres                                              │
+│  Base de datos: cogniseguros                                          │
+│                                                                        │
+│  Si necesitas cambiar, edita: .env                                    │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+
+┌─ 🚀 COMANDOS PRINCIPALES ─────────────────────────────────────────────┐
+│                                                                        │
+│  npm install              → Instalar dependencias                     │
+│  npm run dev              → Solo frontend (Vite)                      │
+│  npm run server           → Solo backend                              │
+│  npm run dev-both         → Frontend + Backend simultáneamente        │
+│  npm run setup-db         → Crear/recrear tablas                      │
+│  npm run migrate          → Ejecutar migraciones                      │
+│  npm run build            → Compilar para producción                  │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+
+┌─ ⚡ TROUBLESHOOTING ──────────────────────────────────────────────────┐
+│                                                                        │
+│  ❌ "Error: connect ECONNREFUSED"                                    │
+│     → PostgreSQL no está corriendo                                    │
+│     → Solución: Inicia PostgreSQL desde Services                     │
+│                                                                        │
+│  ❌ "Autentificación password falló"                                 │
+│     → Contraseña de .env no coincide con PostgreSQL                  │
+│     → Solución: Verifica DB_PASSWORD en .env                         │
+│                                                                        │
+│  ❌ "EADDRINUSE: address already in use :::5000"                     │
+│     → Puerto 5000 ya está en uso                                     │
+│     → Solución: Cambia PORT=5001 en .env                             │
+│                                                                        │
+│  ⚠️  La app funciona en MODO TEST sin PostgreSQL                     │
+│     → Los datos se guardan en memoria (se pierden al reiniciar)       │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+
+¿NECESITAS AYUDA CON ALGUNO DE ESTOS PASOS? 👇

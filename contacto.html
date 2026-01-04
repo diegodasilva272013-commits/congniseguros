@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Cogniseguros AI — Contacto</title>
+  <meta name="description" content="Cogniseguros AI — Contacto."/>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+  <div class="bg"></div>
+  <div data-include="header"></div>
+
+  <main class="page">
+    <div class="container">
+      <div class="card">
+        <div class="pill">Contacto</div>
+        <h1 class="h1">Hablemos</h1>
+        <p class="lead">Dejá tus datos y te respondemos. (Después conectamos a WhatsApp o backend.)</p>
+
+        <div style="height:10px"></div>
+
+        <form class="grid-2" onsubmit="event.preventDefault(); alert('Enviado (demo). Conectamos esto a tu backend/WhatsApp cuando quieras.');">
+          <label class="feature" style="display:block">
+            <span class="muted">Nombre</span>
+            <input name="name" required placeholder="Tu nombre"/>
+          </label>
+
+          <label class="feature" style="display:block">
+            <span class="muted">Email</span>
+            <input type="email" name="email" required placeholder="tu@email.com"/>
+          </label>
+
+          <label class="feature" style="display:block;grid-column:1/-1">
+            <span class="muted">Mensaje</span>
+            <textarea name="msg" rows="5" required placeholder="Contanos qué necesitás..."></textarea>
+          </label>
+
+          <div style="grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn primary" type="submit">Enviar</button>
+            <a class="btn ghost" href="index.html">Volver</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </main>
+
+  <div data-include="footer"></div>
+  <script src="app.js"></script>
+</body>
+</html>

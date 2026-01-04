@@ -1,0 +1,11 @@
+[2m9:35:16 a. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /send-code[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m9:35:22 a. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /send-code[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m9:38:26 a. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /send-code[39m
+Error: connect ECONNREFUSED 127.0.0.1:5000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16)

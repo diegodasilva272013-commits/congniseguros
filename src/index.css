@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+:root{
+	--bg:#070B14;
+	--panel:#0B1224;
+	--panel2:#0A1020;
+	--text:#EAF2FF;
+	--muted:#A8B7D4;
+	--line:rgba(63,209,255,.18);
+	--c1:#3FD1FF;
+	--c2:#A66CFF;
+	--c3:#6CFFB9;
+}
+
+html, body { height: 100%; }
+
+body{
+	margin:0;
+	background:
+		radial-gradient(900px 600px at 20% 10%, rgba(63,209,255,.10), transparent 60%),
+		radial-gradient(900px 600px at 85% 15%, rgba(166,108,255,.12), transparent 55%),
+		var(--bg);
+}

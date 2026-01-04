@@ -1,0 +1,19 @@
+
+> app-cogniseguros@0.0.0 dev-both
+> concurrently "npm run server" "npm run dev"
+
+[0] 
+[0] > app-cogniseguros@0.0.0 server
+[0] > node server.js
+[0] 
+[1] 
+[1] > app-cogniseguros@0.0.0 dev
+[1] > vite
+[1] 
+[0] 🚀 Backend SegurosPro en http://localhost:5000
+[0] ✅ PostgreSQL conectado
+[1] 
+[1]   [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m2149[22m[2m[0m ms[22m
+[1] 
+[1]   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m3000[22m/[39m
+[1] [2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
