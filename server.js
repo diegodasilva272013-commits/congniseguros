@@ -1166,8 +1166,24 @@ app.post("/api/auth/verify-2fa", async (req, res) => {
       return res.status(400).json({ status: "error", message: "Session token y código requeridos" });
     }
 
-    // Validar user ID desde session token
-    const userResult = await pool.query("SELECT * FROM usuarios WHERE id = $1", [session_token]);
+    if (!dbConnected) {
+      return res.status(503).json({ status: "error", message: "DB no disponible" });
+    }
+
+    // Validar user ID desde session token (JWT) emitido en /api/auth/login
+    let decoded;
+    try {
+      decoded = jwt.verify(String(session_token), jwtSecret);
+    } catch {
+      return res.status(401).json({ status: "error", message: "Sesión inválida" });
+    }
+
+    const userId = decoded?.usuario_id || decoded?.id;
+    if (!userId) {
+      return res.status(401).json({ status: "error", message: "Sesión inválida" });
+    }
+
+    const userResult = await pool.query("SELECT * FROM usuarios WHERE id = $1", [userId]);
     if (userResult.rows.length === 0) {
       return res.status(401).json({ status: "error", message: "Sesión inválida" });
     }
@@ -1236,7 +1252,16 @@ app.post("/api/auth/verify-2fa", async (req, res) => {
 
     res.json({
       status: "success",
-      user: { id: user.id, nombre: user.nombre, email: user.email, rol: user.role },
+      token: session_token,
+      user: {
+        id: user.id,
+        nombre: user.nombre,
+        email: user.email,
+        rol: user.rol,
+        pais: user.pais || "AR",
+        paises: user.paises || user.pais || "AR",
+        profile_photo_dataurl: getProfilePhotoDataUrlFromUserRow(user),
+      },
       message: "Login exitoso",
     });
 
@@ -1354,9 +1379,10 @@ app.post("/api/usuarios/set-pais", async (req, res) => {
       return res.status(400).json({ status: "error", message: "País inválido" });
     }
 
-    const u = await pool.query("SELECT id, pais, paises, nombre, email, rol FROM usuarios WHERE id = $1", [
-      aseguradora_id,
-    ]);
+    const u = await pool.query(
+      "SELECT id, pais, paises, nombre, email, rol, profile_photo, profile_photo_mime FROM usuarios WHERE id = $1",
+      [aseguradora_id]
+    );
     if (u.rows.length === 0) {
       return res.status(404).json({ status: "error", message: "Usuario no encontrado" });
     }
@@ -1386,6 +1412,7 @@ app.post("/api/usuarios/set-pais", async (req, res) => {
         rol: user.rol,
         pais: nextPais,
         paises: user.paises || user.pais || "AR",
+        profile_photo_dataurl: getProfilePhotoDataUrlFromUserRow(user),
       },
     });
   } catch (err) {

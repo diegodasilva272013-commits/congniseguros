@@ -53,8 +53,8 @@ const API_URL =
   "https://script.google.com/macros/s/AKfycbxQVq4hyugSoL8tnZDHqnllifiXqvnFPvi5SqMuqxet-wEmr4yz4Dgwt_LdFGEnthyDyA/exec";
 const SUPPORT_PHONE = "59892064193";
 
-// ✅ NUEVO: alias fijo
-const PAGO_ALIAS = "PAGO.MP";
+// ✅ NUEVO: alias de pago (default)
+const DEFAULT_PAGO_ALIAS = "PAGO.MP";
 
 /* ================== HELPERS ================== */
 const safeUpper = (v) => String(v || "").toUpperCase().trim();
@@ -586,6 +586,8 @@ export default function App() {
   // ✅ NUEVO: filtros pagos
   const [pagosFilter, setPagosFilter] = useState("ALL"); // ALL | AL_DIA | VENCIDA
   const [pagosSearch, setPagosSearch] = useState("");
+  const [pagoAlias, setPagoAlias] = useState(DEFAULT_PAGO_ALIAS);
+  const [pagoAliasDraft, setPagoAliasDraft] = useState(DEFAULT_PAGO_ALIAS);
 
   // Client modal (ABM)
   const [showClientModal, setShowClientModal] = useState(false);
@@ -882,7 +884,16 @@ export default function App() {
     try {
       const res = await request({ action: "setUserPais", aseguradora_id: user.id, pais: next });
       if (res?.user) {
-        setUser(res.user);
+        // Importante: /api/usuarios/set-pais devuelve un user reducido (sin profile_photo_dataurl).
+        // Si reemplazamos el objeto completo, se pierde la foto al cambiar de vista.
+        setUser((prev) => {
+          if (!prev) return res.user;
+          const merged = { ...prev, ...res.user };
+          if (!res.user?.profile_photo_dataurl && prev?.profile_photo_dataurl) {
+            merged.profile_photo_dataurl = prev.profile_photo_dataurl;
+          }
+          return merged;
+        });
         showMessage(`Vista cambiada a ${next === "UY" ? "Uruguay" : "Argentina"}.`, "success");
         await loadClients(res.user.id);
       } else {
@@ -1553,7 +1564,7 @@ export default function App() {
     return (
       `Hola ${c.nombre} ${c.apellido}, su cuota ha vencido. ` +
       montoTxt +
-      `Alias: ${PAGO_ALIAS}. ` +
+      `Alias: ${pagoAlias}. ` +
       `Por favor regularice para ponerse al día.`
     );
   };
@@ -1574,7 +1585,7 @@ export default function App() {
         nombre: c.nombre,
         apellido: c.apellido,
         monto: normalizeMonto(c.monto) || "",
-        alias: PAGO_ALIAS,
+        alias: pagoAlias,
       });
       showMessage("WhatsApp de pago enviado.", "success");
     } catch (e) {
@@ -1582,6 +1593,17 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const savePagoAlias = () => {
+    const next = safeUpper(pagoAliasDraft);
+    if (!next) {
+      showMessage("Alias requerido.", "error");
+      return;
+    }
+    setPagoAlias(next);
+    setPagoAliasDraft(next);
+    showMessage("Alias de pago actualizado.", "success");
   };
 
   // Config WhatsApp (safe)
@@ -2280,6 +2302,10 @@ export default function App() {
       // ✅ NUEVO: filtros pagos
       if (typeof st.pagosFilter === "string") setPagosFilter(st.pagosFilter);
       if (typeof st.pagosSearch === "string") setPagosSearch(st.pagosSearch);
+      if (typeof st.pagoAlias === "string") {
+        setPagoAlias(st.pagoAlias);
+        setPagoAliasDraft(st.pagoAlias);
+      }
     }
 
     hydratedRef.current = true;
@@ -2298,6 +2324,7 @@ export default function App() {
       // ✅ NUEVO: pagos
       pagosFilter,
       pagosSearch,
+      pagoAlias,
     });
   }, [
     rootView,
@@ -2307,6 +2334,7 @@ export default function App() {
     voiceOn,
     pagosFilter,
     pagosSearch,
+    pagoAlias,
   ]);
 
   // auto-load
@@ -3448,7 +3476,9 @@ export default function App() {
                     )}
                   </button>
 
-                  <span className="text-sm sm:text-base font-black text-[var(--muted)]">Diego</span>
+                  <span className="text-sm sm:text-base font-black text-[var(--muted)]">
+                    {user?.nombre || user?.email || ""}
+                  </span>
 
                   <span className="text-[var(--text)]">Cartera de clientes</span>
 
@@ -3725,11 +3755,29 @@ export default function App() {
               <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 mb-5">
                 <div className="flex flex-col md:flex-row md:items-center gap-3 justify-between">
                   <div className="flex items-center gap-2">
-                    <Pill tone="blue">Alias fijo: {PAGO_ALIAS}</Pill>
+                    <Pill tone="blue">Alias: {pagoAlias}</Pill>
                     <Pill tone="amber">Vencidos: {pagosCountVencida}</Pill>
                   </div>
 
                   <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={pagoAliasDraft}
+                        onChange={(e) => setPagoAliasDraft(e.target.value)}
+                        placeholder={DEFAULT_PAGO_ALIAS}
+                        className="px-4 py-3 border border-slate-300 rounded-2xl outline-none w-full sm:w-[180px]"
+                        title="Alias de pago para mensajes de cuota"
+                      />
+                      <button
+                        type="button"
+                        onClick={savePagoAlias}
+                        className="px-4 py-3 rounded-2xl bg-[rgba(108,255,185,.14)] border border-[rgba(108,255,185,.32)] shadow-sm text-xs font-black text-[var(--text)] hover:bg-[rgba(108,255,185,.20)]"
+                        title="Guardar alias"
+                      >
+                        Guardar
+                      </button>
+                    </div>
+
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                       <input
@@ -3769,7 +3817,7 @@ export default function App() {
                 showMonto
                 showPagoStatus
                 showPagoWhatsApp
-                pagoAlias={PAGO_ALIAS}
+                pagoAlias={pagoAlias}
                 onPagoWhatsAppAuto={sendWhatsAppPagoAuto}
                 onPagoWhatsAppManual={sendWhatsAppPagoManual}
                 onEdit={openEditClient}
@@ -4402,7 +4450,7 @@ export default function App() {
                       <div className="space-y-1.5">
                         <label className="text-[11px] font-black text-emerald-700">Alias</label>
                         <input
-                          value={PAGO_ALIAS}
+                          value={pagoAlias}
                           readOnly
                           className="w-full px-4 py-2.5 border rounded-2xl bg-white outline-none"
                         />
@@ -4686,7 +4734,7 @@ function ClientsTableFull({
   showPagoWhatsApp = false,
   onPagoWhatsAppAuto,
   onPagoWhatsAppManual,
-  pagoAlias = PAGO_ALIAS,
+  pagoAlias = DEFAULT_PAGO_ALIAS,
 }) {
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc"); // asc | desc
