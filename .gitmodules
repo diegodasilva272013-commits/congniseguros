@@ -1,0 +1,3 @@
+[submodule "cogniseguros_app_web"]
+	path = cogniseguros_app_web
+	url = https://github.com/diegodasilva272013-commits/cogniseguros_app_web.git
