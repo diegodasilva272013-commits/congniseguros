@@ -2804,7 +2804,7 @@ app.post("/api/webhooks/n8n/whatsapp-send", async (req, res) => {
     return res.json({ status: "success", ...result });
   } catch (err) {
     const code = Number(err?.statusCode) || 500;
-    return res.status(code).json({ status: "error", message: err.message });
+    return res.status(code).json(toSafeApiErrorBody(err));
   }
 });
 
