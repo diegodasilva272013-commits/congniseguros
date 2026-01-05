@@ -1,0 +1,15 @@
+.git
+**/.git
+.vscode
+node_modules
+logs
+backups
+dist
+.vite
+.env
+.env.*
+*.log
+*.err.txt
+*.out.txt
+*.timestamp-*.mjs
+_WIP_before_abort.patch
