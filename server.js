@@ -767,6 +767,27 @@ const maskMiddle = (s, keepStart = 4, keepEnd = 3) => {
   return str.slice(0, a) + "••••••••" + str.slice(str.length - b);
 };
 
+const isProd = () => safeTrim(process.env.NODE_ENV || "") === "production";
+
+const makeConfigError = (service, missingKeys, message) => {
+  const e = new Error(message);
+  e.statusCode = 503;
+  e.code = "CONFIG_MISSING";
+  e.service = String(service || "config");
+  e.missing = Array.isArray(missingKeys) ? missingKeys : [];
+  return e;
+};
+
+const toSafeApiErrorBody = (err) => {
+  const body = { status: "error", message: err?.message || "Error" };
+  if (err?.code === "CONFIG_MISSING") {
+    body.code = "CONFIG_MISSING";
+    body.service = err?.service;
+    body.missing = Array.isArray(err?.missing) ? err.missing : [];
+  }
+  return body;
+};
+
 const resolveAseguradoraIdFromPhoneNumberId = async (phoneNumberId) => {
   const phoneId = safeTrim(phoneNumberId);
   if (!phoneId || !dbConnected) return null;
@@ -821,7 +842,14 @@ const sendWhatsAppText = async (req, { aseguradora_id, to, message }) => {
   const phoneId = safeTrim(creds.phoneId || process.env.WHATSAPP_PHONE_NUMBER_ID || "");
   const token = safeTrim(creds.token || process.env.WHATSAPP_ACCESS_TOKEN || "");
   if (!phoneId || !token) {
-    throw new Error("WhatsApp no configurado en el servidor");
+    const missing = [];
+    if (!phoneId) missing.push("WHATSAPP_PHONE_NUMBER_ID");
+    if (!token) missing.push("WHATSAPP_ACCESS_TOKEN");
+    throw makeConfigError(
+      "whatsapp",
+      missing,
+      "WhatsApp no configurado. Guardá Phone Number ID y Access Token en Configuración (WhatsApp) o configurá WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN en EasyPanel y reiniciá."
+    );
   }
 
   const url = `https://graph.facebook.com/v18.0/${phoneId}/messages`;
@@ -987,7 +1015,12 @@ const maybeAutoReplyFromWebhook = async ({ aseguradoraId, waFrom, name, bodyText
     if (!enabled) return;
 
     const apiKey = await resolveOpenAiApiKeyForReq({ body: { aseguradora_id: aseguradoraId, scope: "ASEGURADORA", scope_id: aseguradoraId } });
-    if (!apiKey) return;
+    const looksPlaceholder =
+      !apiKey ||
+      /tu[_-]?openai/i.test(apiKey) ||
+      /_aqui$/i.test(apiKey) ||
+      /^YOUR_/i.test(apiKey);
+    if (looksPlaceholder) return;
 
     const tenantPool = await getTenantPoolFromReq({ body: { aseguradora_id: aseguradoraId }, query: {}, headers: {} });
     const ctx = await tenantPool.query(
@@ -2262,6 +2295,11 @@ app.get("/api/whatsapp/webhook", async (req, res) => {
       return res.status(200).send(challenge);
     }
 
+    // En producción, si no hay verify token configurado, devolvemos un error claro.
+    if (mode === "subscribe" && !expected && isProd()) {
+      return res.status(503).send("WHATSAPP_VERIFY_TOKEN no configurado en el servidor");
+    }
+
     // Local/dev: allow challenge if no token configured.
     if (mode === "subscribe" && !expected) {
       return res.status(200).send(challenge || "ok");
@@ -2816,7 +2854,8 @@ app.post("/api/whatsapp/send", async (req, res) => {
 
     res.json({ status: "success", ...result });
   } catch (err) {
-    res.status(500).json({ status: "error", message: err.message });
+    const code = Number(err?.statusCode) || 500;
+    return res.status(code).json(toSafeApiErrorBody(err));
   }
 });
 
@@ -2835,11 +2874,17 @@ app.post("/api/marketing/copy", async (req, res) => {
       /_aqui$/i.test(apiKey) ||
       /^YOUR_/i.test(apiKey);
     if (looksPlaceholder) {
-      return res.status(400).json({
-        status: "error",
-        message:
-          "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá OPENAI_API_KEY en el archivo .env y reiniciá el backend.",
-      });
+      return res
+        .status(503)
+        .json(
+          toSafeApiErrorBody(
+            makeConfigError(
+              "openai",
+              ["OPENAI_API_KEY"],
+              "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá OPENAI_API_KEY en EasyPanel y reiniciá el backend."
+            )
+          )
+        );
     }
 
     const system =
@@ -2893,11 +2938,17 @@ app.post("/api/marketing/image", async (req, res) => {
       /_aqui$/i.test(apiKey) ||
       /^YOUR_/i.test(apiKey);
     if (looksPlaceholder) {
-      return res.status(400).json({
-        status: "error",
-        message:
-          "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá OPENAI_API_KEY en el archivo .env y reiniciá el backend.",
-      });
+      return res
+        .status(503)
+        .json(
+          toSafeApiErrorBody(
+            makeConfigError(
+              "openai",
+              ["OPENAI_API_KEY"],
+              "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá OPENAI_API_KEY en EasyPanel y reiniciá el backend."
+            )
+          )
+        );
     }
 
     const response = await fetch("https://api.openai.com/v1/images/generations", {
