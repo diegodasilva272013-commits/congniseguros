@@ -78,10 +78,13 @@ const ensureEmailCodesTable = async () => {
       email TEXT NOT NULL,
       purpose TEXT NOT NULL,
       code_hash TEXT NOT NULL,
+      code_plain TEXT,
       expires_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+  // Compat: DBs existentes pueden no tener la columna.
+  await pool.query("ALTER TABLE email_verification_codes ADD COLUMN IF NOT EXISTS code_plain TEXT").catch(() => {});
   await pool.query(
     "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_purpose_expires ON email_verification_codes(purpose, expires_at)"
   );
@@ -99,8 +102,8 @@ const createEmailCodeAndSend = async ({ email, purpose }) => {
 
   await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
   await pool.query(
-    "INSERT INTO email_verification_codes (email, purpose, code_hash, expires_at) VALUES ($1, $2, $3, $4)",
-    [emailNorm, p, codeHash, expiresAt]
+    "INSERT INTO email_verification_codes (email, purpose, code_hash, code_plain, expires_at) VALUES ($1, $2, $3, $4, $5)",
+    [emailNorm, p, codeHash, code, expiresAt]
   );
 
   await sendCodeEmail(emailNorm, code);
@@ -114,7 +117,7 @@ const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
   if (!c) return { valid: false, message: "Código requerido" };
 
   const r = await pool.query(
-    "SELECT id, email, code_hash, expires_at FROM email_verification_codes WHERE purpose = $1 ORDER BY id DESC LIMIT 1",
+    "SELECT id, email, code_hash, code_plain, expires_at FROM email_verification_codes WHERE purpose = $1 ORDER BY id DESC LIMIT 1",
     [p]
   );
   const row = r.rows?.[0];
@@ -126,9 +129,15 @@ const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
     return { valid: false, message: "Código expirado" };
   }
 
-  const expected = String(row.code_hash || "");
-  const got = hashEmailCode({ email: row.email, purpose: p, code: c });
-  if (expected !== got) return { valid: false, message: "Código incorrecto" };
+  const plain = String(row.code_plain || "").trim();
+  if (plain) {
+    if (plain !== c) return { valid: false, message: "Código incorrecto" };
+  } else {
+    // Fallback para filas viejas que solo tengan hash
+    const expected = String(row.code_hash || "");
+    const got = hashEmailCode({ email: row.email, purpose: p, code: c });
+    if (expected !== got) return { valid: false, message: "Código incorrecto" };
+  }
 
   await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
   return { valid: true, message: "Código verificado", email: row.email };
