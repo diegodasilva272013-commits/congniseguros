@@ -1892,8 +1892,8 @@ app.post("/api/cliente/send-code", async (req, res) => {
     const sent = await sendVerificationCode(email);
     let emailWarning = "";
     if (!sent?.success) {
-      const errorMsg = sent?.message || "No se pudo enviar el código al email. Pedí ayuda a tu aseguradora.";
-      console.log("[ERROR REAL EMAIL]", errorMsg, sent?.error || "");
+      const errorMsg = sent?.message || "EMAIL_SEND_FAIL: unknown";
+      console.log("[ERROR REAL EMAIL]", errorMsg, sent?.error || null);
       return res.status(500).json({ status: "error", message: errorMsg, error: sent?.error || null });
     }
     clientLoginCooldown.set(key, Date.now());

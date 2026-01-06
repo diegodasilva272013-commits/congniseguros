@@ -8,13 +8,66 @@ dotenv.config();
 const verificationCodes = new Map();
 
 // Configurar transporte de email
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+const buildTransporter = () => {
+  const user = String(process.env.EMAIL_USER || "").trim();
+  const pass = String(process.env.EMAIL_PASS || "").trim();
+
+  // Soporte SMTP genérico (recomendado en producción). Si no está, caemos a Gmail.
+  const host = String(process.env.EMAIL_HOST || "").trim();
+  const portRaw = String(process.env.EMAIL_PORT || "").trim();
+  const secureRaw = String(process.env.EMAIL_SECURE || "").trim().toLowerCase();
+  const debug = String(process.env.EMAIL_DEBUG || "").trim().toLowerCase() === "true";
+
+  if (host) {
+    const port = portRaw ? Number(portRaw) : 587;
+    const secure = secureRaw ? secureRaw === "true" || secureRaw === "1" : port === 465;
+    return nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: { user, pass },
+      logger: debug,
+      debug,
+    });
+  }
+
+  return nodemailer.createTransport({
+    service: "gmail",
+    auth: { user, pass },
+    logger: debug,
+    debug,
+  });
+};
+
+const transporter = buildTransporter();
+
+const sanitizeEmailError = (err) => {
+  try {
+    if (!err) return { summary: "unknown" };
+    const code = err.code || null;
+    const command = err.command || null;
+    const responseCode = err.responseCode || null;
+    const message = err.message ? String(err.message) : String(err);
+    const response = err.response ? String(err.response) : null;
+    const summaryParts = [];
+    if (code) summaryParts.push(`code=${code}`);
+    if (responseCode) summaryParts.push(`responseCode=${responseCode}`);
+    if (command) summaryParts.push(`command=${command}`);
+    summaryParts.push(`message=${message}`);
+    if (response) summaryParts.push(`response=${response}`);
+
+    return {
+      summary: summaryParts.join(" | "),
+      code,
+      command,
+      responseCode,
+      message,
+      response,
+    };
+  } catch {
+    return { summary: "unknown" };
+  }
+};
 
 // Generar código de 6 dígitos
 const generateCode = () => Math.floor(100000 + Math.random() * 900000).toString();
@@ -58,8 +111,18 @@ export async function sendVerificationCode(email) {
 
     return { success: true, message: "Código enviado a tu email" };
   } catch (error) {
-    console.error("Error enviando email:", error);
-    return { success: false, message: String(error), error: error };
+    const info = sanitizeEmailError(error);
+    console.error("[EMAIL_SEND_FAIL]", info);
+    return {
+      success: false,
+      message: `EMAIL_SEND_FAIL: ${info.summary}`,
+      error: {
+        code: info.code || null,
+        command: info.command || null,
+        responseCode: info.responseCode || null,
+        response: info.response || null,
+      },
+    };
   }
 }
 
