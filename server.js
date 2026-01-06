@@ -1153,14 +1153,19 @@ app.post("/api/auth/login", async (req, res) => {
 
           // Enviar código
           if (tfa.tipo === "email") {
-            await enviarEmail(tfa.contacto, "Tu código 2FA", codigo);
+            try {
+              await enviarEmail(tfa.contacto, "Tu código 2FA", codigo);
+            } catch (err) {
+              console.log("[WARN] Error enviando email 2FA:", err.message);
+              // No bloquear acceso, solo mostrar advertencia
+            }
           } else if (tfa.tipo === "sms") {
             await enviarSMS(tfa.contacto, codigo);
           }
 
           return res.json({
             status: "2fa_required",
-            message: "Código enviado a tu " + tfa.tipo,
+            message: "Código enviado a tu " + tfa.tipo + (tfa.tipo === "email" ? " (advertencia: error enviando email, revisa configuración)" : ""),
             session_token: token,
             method: tfa.tipo,
           });
@@ -1885,17 +1890,19 @@ app.post("/api/cliente/send-code", async (req, res) => {
     }
 
     const sent = await sendVerificationCode(email);
+    let emailWarning = "";
     if (!sent?.success) {
-      return res.status(500).json({ status: "error", message: sent?.message || "No se pudo enviar el código" });
+      const errorMsg = sent?.message || "No se pudo enviar el código al email. Pedí ayuda a tu aseguradora.";
+      console.log("[ERROR REAL EMAIL]", errorMsg, sent?.error || "");
+      return res.status(500).json({ status: "error", message: errorMsg, error: sent?.error || null });
     }
-
     clientLoginCooldown.set(key, Date.now());
     clientLoginPending.set(key, { email, createdAt: Date.now() });
-
     res.json({
       status: "success",
       message: "Código enviado",
       masked_email: maskEmail(email),
+      email_warning: emailWarning,
     });
   } catch (err) {
     res.status(500).json({ status: "error", message: err.message });

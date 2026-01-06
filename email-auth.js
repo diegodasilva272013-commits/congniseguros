@@ -59,7 +59,7 @@ export async function sendVerificationCode(email) {
     return { success: true, message: "Código enviado a tu email" };
   } catch (error) {
     console.error("Error enviando email:", error);
-    return { success: false, message: "Error al enviar email" };
+    return { success: false, message: String(error), error: error };
   }
 }
 
