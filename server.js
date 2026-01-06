@@ -636,6 +636,7 @@ pool.query("SELECT NOW()").then(() => {
 }).catch((err) => {
   dbConnected = false;
   console.log("⚠️ PostgreSQL no disponible, usando usuarios de test");
+  console.error("❌ PostgreSQL connect error:", err?.message || err);
 });
 
 // ===== PERFIL: FOTO =====
