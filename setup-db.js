@@ -6,27 +6,84 @@ dotenv.config();
 
 const { Pool } = pkg;
 
+function parsePostgresUrl(rawUrl) {
+  if (!rawUrl) return null;
+  const url = new URL(rawUrl);
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    throw new Error(`Unsupported DATABASE_URL protocol: ${url.protocol}`);
+  }
+
+  const databaseFromPath = url.pathname?.replace(/^\//, "");
+  const port = url.port ? Number(url.port) : 5432;
+  const sslMode = url.searchParams.get("sslmode");
+
+  return {
+    user: decodeURIComponent(url.username || ""),
+    password: decodeURIComponent(url.password || ""),
+    host: url.hostname,
+    port,
+    database: databaseFromPath || undefined,
+    ssl:
+      sslMode === "require" || sslMode === "verify-full" || sslMode === "verify-ca"
+        ? { rejectUnauthorized: false }
+        : undefined,
+  };
+}
+
+function getDbUrlFromEnv() {
+  return (
+    process.env.DB_URL ||
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRESQL_URL ||
+    process.env.PGURL ||
+    ""
+  ).trim();
+}
+
+function getPgConfig({ databaseOverride } = {}) {
+  const dbUrl = getDbUrlFromEnv();
+  if (dbUrl) {
+    const parsed = parsePostgresUrl(dbUrl);
+    return {
+      user: parsed.user,
+      host: parsed.host,
+      database: databaseOverride || parsed.database,
+      password: parsed.password,
+      port: parsed.port,
+      ssl: parsed.ssl,
+    };
+  }
+
+  return {
+    user: process.env.DB_USER || process.env.PGUSER || "postgres",
+    host: process.env.DB_HOST || process.env.PGHOST || "localhost",
+    database: databaseOverride || process.env.DB_NAME || process.env.PGDATABASE,
+    password: process.env.DB_PASSWORD || process.env.PGPASSWORD || "postgres",
+    port: Number(process.env.DB_PORT || process.env.PGPORT || 5432),
+  };
+}
+
 // Por defecto NO destruimos datos (preserva IDs de usuarios y tenants).
 // Para reiniciar desde cero: setear RESET_DB=1 antes de ejecutar.
 const RESET_DB = String(process.env.RESET_DB || "").trim() === "1";
 
 // Conexión a PostgreSQL
-const pool = new Pool({
-  user: process.env.DB_USER || "postgres",
-  host: process.env.DB_HOST || "localhost",
-  database: "postgres", // BD por defecto para conectar
-  password: process.env.DB_PASSWORD || "postgres",
-  port: process.env.DB_PORT || 5432,
-});
+const dbName = (process.env.DB_NAME || "cogniseguros").trim();
+const adminDbName = (process.env.DB_ADMIN_DB || "postgres").trim();
+
+const pool = new Pool(getPgConfig({ databaseOverride: adminDbName }));
 
 const client = await pool.connect();
 
 try {
   console.log("🔧 Iniciando setup de BD...\n");
 
+  const cfg = getPgConfig({ databaseOverride: adminDbName });
+  console.log(`ℹ️  Conectando a ${cfg.host}:${cfg.port}/${adminDbName}`);
+
   // 1. Crear BD
   console.log("1️⃣  Creando BD 'cogniseguros'...");
-  const dbName = "cogniseguros";
   const exists = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [dbName]);
 
   if (exists.rows.length > 0) {
@@ -64,13 +121,7 @@ try {
   await pool.end();
 
   // Conectar a la nueva BD
-  const pool2 = new Pool({
-    user: process.env.DB_USER || "postgres",
-    host: process.env.DB_HOST || "localhost",
-    database: "cogniseguros",
-    password: process.env.DB_PASSWORD || "postgres",
-    port: process.env.DB_PORT || 5432,
-  });
+  const pool2 = new Pool(getPgConfig({ databaseOverride: dbName }));
 
   const conn = await pool2.connect();
 
