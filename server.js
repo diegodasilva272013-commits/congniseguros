@@ -11,6 +11,10 @@ import path from "path";
 
 dotenv.config();
 
+// Para diagnosticar despliegues en EasyPanel: si no ves este build_id en /api/health,
+// el servicio NO está corriendo el último código del repo.
+const APP_BUILD_ID = process.env.APP_BUILD_ID || "2a5b15f";
+
 const app = express();
 app.use(cors());
 app.use(
@@ -100,7 +104,7 @@ app.get("/", (req, res) => {
 });
 
 app.get("/health", (req, res) => {
-  res.json({ status: "success", ok: true, time: new Date().toISOString() });
+  res.json({ status: "success", ok: true, time: new Date().toISOString(), build_id: APP_BUILD_ID });
 });
 
 const { Pool } = pkg;
@@ -1087,7 +1091,7 @@ const enviarSMS = async (telefono, codigo) => {
 // ======== RUTAS ========
 
 app.get("/api/health", (req, res) => {
-  res.json({ status: "success", message: "SegurosPro Backend ONLINE" });
+  res.json({ status: "success", message: "SegurosPro Backend ONLINE", build_id: APP_BUILD_ID });
 });
 
 app.post("/api/ping", (req, res) => {
