@@ -33,7 +33,7 @@ if (hasFrontendBuild) {
 }
 
 // ===== CLIENT PORTAL (seguro): sesión por código =====
-// Nota: esto es in-memory (en producción: Redis/DB). Suficiente para dev/local.
+// N12|ota: esto es in-memory (en producción: Redis/DB). Suficiente para dev/local.
 const clientLoginPending = new Map(); // key: "asegId:dni" -> { email, createdAt }
 const clientLoginCooldown = new Map(); // key: "asegId:dni" -> lastSentMs
 
@@ -3392,10 +3392,12 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-// En Windows, a veces `localhost` resuelve primero a ::1 (IPv6).
-// Escuchar en '::' permite localhost (IPv6) y 127.0.0.1 (IPv4).
-const server = app.listen(PORT, "::", () => {
-  console.log(`🚀 Backend SegurosPro en http://localhost:${PORT}`);
+// En contenedores/producción (EasyPanel), lo más compatible es escuchar en IPv4.
+// En dev local, '::' permite localhost (IPv6) y 127.0.0.1 (IPv4).
+const LISTEN_HOST = String(process.env.HOST || "").trim() || (isProd() ? "0.0.0.0" : "::");
+const server = app.listen(PORT, LISTEN_HOST, () => {
+  const hostLabel = LISTEN_HOST === "0.0.0.0" ? "0.0.0.0" : "localhost";
+  console.log(`🚀 Backend SegurosPro en http://${hostLabel}:${PORT}`);
 });
 
 server.on("error", (err) => {
