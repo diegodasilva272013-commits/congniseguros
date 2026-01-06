@@ -139,8 +139,8 @@ const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
   const p = String(purpose || "").trim();
   const cRaw = String(code || "").trim();
   const c = cRaw.replace(/[^\d]/g, "");
-  if (!p) return { valid: false, message: "Primero pedí el código" };
-  if (!c) return { valid: false, message: "Código requerido" };
+  if (!p) return { valid: false, message: "Primero pedí el código", reason: "missing_purpose" };
+  if (!c) return { valid: false, message: "Código requerido", reason: "missing_code" };
 
   const safePurpose = (() => {
     try {
@@ -167,7 +167,7 @@ const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
   const rows = Array.isArray(r.rows) ? r.rows : [];
   if (rows.length === 0) {
     console.log("[EMAIL_CODE_VERIFY_FAIL] not_found", { purpose: safePurpose });
-    return { valid: false, message: "Primero pedí el código" };
+    return { valid: false, message: "Primero pedí el código", reason: "not_found" };
   }
 
   let hasAnyUnexpired = false;
@@ -200,7 +200,7 @@ const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
   if (!hasAnyUnexpired) {
     await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
     console.log("[EMAIL_CODE_VERIFY_FAIL] expired", { purpose: safePurpose });
-    return { valid: false, message: "Código expirado" };
+    return { valid: false, message: "Código expirado", reason: "expired" };
   }
 
   if (!matched) {
@@ -208,7 +208,7 @@ const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
       purpose: safePurpose,
       code_len: c.length,
     });
-    return { valid: false, message: "Código incorrecto" };
+    return { valid: false, message: "Código incorrecto", reason: "mismatch" };
   }
 
   await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
@@ -2144,7 +2144,13 @@ app.post("/api/cliente/verify-code", async (req, res) => {
     }
 
     if (!v?.valid) {
-      return res.status(401).json({ status: "error", message: v?.message || "Código inválido" });
+      const reason = String(v?.reason || "").trim();
+      const msg = String(v?.message || "Código inválido");
+      return res.status(401).json({
+        status: "error",
+        message: reason ? `${msg} (ref: ${reason})` : msg,
+        reason: reason || undefined,
+      });
     }
 
     clientLoginPending.delete(key);
