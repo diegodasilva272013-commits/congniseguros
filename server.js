@@ -30,6 +30,8 @@ const APP_BUILD_ID =
   normalizeBuildId(process.env.SOURCE_VERSION) ||
   "unknown";
 
+const APP_STARTED_AT = new Date().toISOString();
+
 const app = express();
 app.use(cors());
 app.use(
@@ -116,27 +118,60 @@ const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
   if (!p) return { valid: false, message: "Primero pedí el código" };
   if (!c) return { valid: false, message: "Código requerido" };
 
+  const safePurpose = (() => {
+    try {
+      // purpose esperado: "client:<asegId>:<dni>" | "aseg_login:<email>"
+      const parts = p.split(":");
+      if (parts[0] === "client") {
+        const aseg = parts[1] || "?";
+        const dni = String(parts[2] || "");
+        const last = dni ? dni.slice(-3) : "";
+        return `client:${aseg}:***${last}`;
+      }
+      if (parts[0] === "aseg_login") return "aseg_login:***";
+      return "purpose:***";
+    } catch {
+      return "purpose:***";
+    }
+  })();
+
   const r = await pool.query(
     "SELECT id, email, code_hash, code_plain, expires_at FROM email_verification_codes WHERE purpose = $1 ORDER BY id DESC LIMIT 1",
     [p]
   );
   const row = r.rows?.[0];
-  if (!row) return { valid: false, message: "Primero pedí el código" };
+  if (!row) {
+    console.log("[EMAIL_CODE_VERIFY_FAIL] not_found", { purpose: safePurpose });
+    return { valid: false, message: "Primero pedí el código" };
+  }
 
   const exp = new Date(row.expires_at);
   if (!(exp instanceof Date) || isNaN(exp.getTime()) || exp.getTime() < Date.now()) {
     await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
+    console.log("[EMAIL_CODE_VERIFY_FAIL] expired", { purpose: safePurpose });
     return { valid: false, message: "Código expirado" };
   }
 
   const plain = String(row.code_plain || "").trim();
   if (plain) {
-    if (plain !== c) return { valid: false, message: "Código incorrecto" };
+    if (plain !== c) {
+      console.log("[EMAIL_CODE_VERIFY_FAIL] mismatch_plain", {
+        purpose: safePurpose,
+        code_len: c.length,
+      });
+      return { valid: false, message: "Código incorrecto" };
+    }
   } else {
     // Fallback para filas viejas que solo tengan hash
     const expected = String(row.code_hash || "");
     const got = hashEmailCode({ email: row.email, purpose: p, code: c });
-    if (expected !== got) return { valid: false, message: "Código incorrecto" };
+    if (expected !== got) {
+      console.log("[EMAIL_CODE_VERIFY_FAIL] mismatch_hash", {
+        purpose: safePurpose,
+        code_len: c.length,
+      });
+      return { valid: false, message: "Código incorrecto" };
+    }
   }
 
   await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
@@ -204,7 +239,15 @@ app.get("/", (req, res) => {
 });
 
 app.get("/health", (req, res) => {
-  res.json({ status: "success", ok: true, time: new Date().toISOString(), build_id: APP_BUILD_ID });
+  res.json({
+    status: "success",
+    ok: true,
+    time: new Date().toISOString(),
+    started_at: APP_STARTED_AT,
+    build_id: APP_BUILD_ID,
+    db_connected: dbConnected,
+    email_codes_mode: dbConnected ? "db" : "mem",
+  });
 });
 
 const { Pool } = pkg;
@@ -1202,7 +1245,14 @@ const enviarSMS = async (telefono, codigo) => {
 // ======== RUTAS ========
 
 app.get("/api/health", (req, res) => {
-  res.json({ status: "success", message: "SegurosPro Backend ONLINE", build_id: APP_BUILD_ID });
+  res.json({
+    status: "success",
+    message: "SegurosPro Backend ONLINE",
+    started_at: APP_STARTED_AT,
+    build_id: APP_BUILD_ID,
+    db_connected: dbConnected,
+    email_codes_mode: dbConnected ? "db" : "mem",
+  });
 });
 
 app.post("/api/ping", (req, res) => {
