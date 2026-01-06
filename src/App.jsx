@@ -2046,12 +2046,10 @@ export default function App() {
 
         setUser(data.user);
         setMode("dashboard");
-        if (data.user?.rol === "admin") {
-          setMenu("admin");
-        } else {
-          setMenu("cartera");
-          loadClients(data.user.id);
-        }
+        // En "Aseguradoras" siempre abrir el panel de la aseguradora.
+        // El Admin (Desarrollador) tiene su entrada aparte y login por password.
+        setMenu("cartera");
+        loadClients(data.user.id);
         showMessage(`Bienvenido ${data.user.nombre}`, "success");
       } else {
         showMessage(data.message, "error");
@@ -3263,22 +3261,6 @@ export default function App() {
 
   /* ================== ASEGURADORAS DASHBOARD ================== */
   if (rootView === "aseguradoras" && mode === "dashboard") {
-    if (user?.rol === "admin") {
-      return (
-        <div className="min-h-screen bg-slate-50 font-sans">
-          {Toast}
-          <BackButton
-            show
-            onClick={() => {
-              logout();
-              setRootView("home");
-            }}
-          />
-          <AdminDashboard />
-        </div>
-      );
-    }
-
     return (
       <div className="min-h-screen bg-transparent font-sans">
         {Toast}
