@@ -51,7 +51,7 @@ import {
 /* ================== CONFIG ================== */
 const API_URL =
   "https://script.google.com/macros/s/AKfycbxQVq4hyugSoL8tnZDHqnllifiXqvnFPvi5SqMuqxet-wEmr4yz4Dgwt_LdFGEnthyDyA/exec";
-const SUPPORT_PHONE = "59892064193";
+const SUPPORT_PHONE = "59892034193";
 
 // ✅ NUEVO: alias de pago (default)
 const DEFAULT_PAGO_ALIAS = "PAGO.MP";
