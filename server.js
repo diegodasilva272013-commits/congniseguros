@@ -114,7 +114,8 @@ const createEmailCodeAndSend = async ({ email, purpose }) => {
 
 const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
   const p = String(purpose || "").trim();
-  const c = String(code || "").trim();
+  const cRaw = String(code || "").trim();
+  const c = cRaw.replace(/[^\d]/g, "");
   if (!p) return { valid: false, message: "Primero pedí el código" };
   if (!c) return { valid: false, message: "Código requerido" };
 
@@ -153,8 +154,9 @@ const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
   }
 
   const plain = String(row.code_plain || "").trim();
+  const plainDigits = plain.replace(/[^\d]/g, "");
   if (plain) {
-    if (plain !== c) {
+    if (plainDigits !== c) {
       console.log("[EMAIL_CODE_VERIFY_FAIL] mismatch_plain", {
         purpose: safePurpose,
         code_len: c.length,
