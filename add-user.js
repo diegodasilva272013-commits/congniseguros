@@ -6,83 +6,62 @@ dotenv.config();
 
 const { Pool } = pkg;
 
+const email = String(process.argv[2] || "").trim().toLowerCase();
+const password = String(process.argv[3] || "");
+const name = String(process.argv[4] || "").trim() || "Admin";
+const role = String(process.argv[5] || "admin").trim().toLowerCase();
+const planName = String(process.argv[6] || "ENTERPRISE").trim().toUpperCase();
+
+if (!email || !password) {
+  console.error(
+    "Usage: node add-user.js <email> <password> [name] [role=admin] [plan=ENTERPRISE]"
+  );
+  process.exit(1);
+}
+
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: "cogniseguros",
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
+  user: process.env.DB_USER || "postgres",
+  host: process.env.DB_HOST || "localhost",
+  database: process.env.DB_NAME || "cogniseguros",
+  password: process.env.DB_PASSWORD || "postgres",
+  port: Number(process.env.DB_PORT || 5432),
 });
 
 const conn = await pool.connect();
 
 try {
-  console.log("🔧 Agregando usuario diegodasilva272013@gmail.com...\n");
+  const hashedPassword = await bcrypt.hash(password, 12);
 
-  // Verificar si existe
-  const exists = await conn.query(
-    "SELECT id FROM usuarios WHERE email = $1",
-    ["diegodasilva272013@gmail.com"]
+  const upsert = await conn.query(
+    `INSERT INTO usuarios (nombre, email, password, rol)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (email) DO UPDATE SET nombre=EXCLUDED.nombre, password=EXCLUDED.password, rol=EXCLUDED.rol
+     RETURNING id, email, rol`,
+    [name, email, hashedPassword, role]
   );
 
-  if (exists.rows.length > 0) {
-    console.log("⚠️  Usuario ya existe. Actualizando contraseña...");
-    const hashedPassword = await bcrypt.hash("Manyacapo123@", 10);
-    await conn.query(
-      "UPDATE usuarios SET password = $1, rol = $2 WHERE email = $3",
-      [hashedPassword, "admin", "diegodasilva272013@gmail.com"]
-    );
-  } else {
-    console.log("✅ Creando nuevo usuario...");
-    const hashedPassword = await bcrypt.hash("Manyacapo123@", 10);
-    await conn.query(
-      "INSERT INTO usuarios (nombre, email, password, rol) VALUES ($1, $2, $3, $4)",
-      ["Diego Da Silva", "diegodasilva272013@gmail.com", hashedPassword, "admin"]
-    );
-  }
+  const userId = upsert.rows[0].id;
 
-  // Crear suscripción ENTERPRISE
-  const user = await conn.query(
-    "SELECT id FROM usuarios WHERE email = $1",
-    ["diegodasilva272013@gmail.com"]
+  const sub = await conn.query(
+    "SELECT id FROM suscripciones WHERE aseguradora_id = $1",
+    [userId]
   );
 
-  if (user.rows.length > 0) {
-    const userId = user.rows[0].id;
-    
-    // Verificar si ya tiene suscripción
-    const sub = await conn.query(
-      "SELECT id FROM suscripciones WHERE aseguradora_id = $1",
-      [userId]
-    );
-
-    if (sub.rows.length === 0) {
-      // Obtener plan ENTERPRISE
-      const plan = await conn.query(
-        "SELECT id FROM planes WHERE nombre = $1",
-        ["ENTERPRISE"]
+  if (sub.rows.length === 0) {
+    const plan = await conn.query("SELECT id FROM planes WHERE nombre = $1", [planName]);
+    if (plan.rows.length > 0) {
+      await conn.query(
+        "INSERT INTO suscripciones (aseguradora_id, plan_id, estado) VALUES ($1, $2, $3)",
+        [userId, plan.rows[0].id, "activa"]
       );
-
-      if (plan.rows.length > 0) {
-        await conn.query(
-          `INSERT INTO suscripciones (aseguradora_id, plan_id, estado) 
-           VALUES ($1, $2, $3)`,
-          [userId, plan.rows[0].id, "activa"]
-        );
-        console.log("✅ Suscripción ENTERPRISE asignada");
-      }
     }
   }
 
-  console.log("\n✅ Usuario listo!\n");
-  console.log("📧 Email:    diegodasilva272013@gmail.com");
-  console.log("🔑 Password: Manyacapo123@");
-  console.log("👤 Rol:      admin\n");
-
+  console.log("OK:", upsert.rows[0]);
 } catch (err) {
-  console.error("❌ Error:", err.message);
+  console.error("Error:", err.message);
+  process.exitCode = 1;
 } finally {
-  await conn.end();
+  conn.release();
   await pool.end();
-  process.exit(0);
 }

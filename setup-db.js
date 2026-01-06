@@ -68,6 +68,10 @@ function getPgConfig({ databaseOverride } = {}) {
 // Para reiniciar desde cero: setear RESET_DB=1 antes de ejecutar.
 const RESET_DB = String(process.env.RESET_DB || "").trim() === "1";
 
+// En producción NO se crean usuarios/suscripciones de prueba.
+// Para sembrar data de test manualmente: SEED_TEST_DATA=1
+const SEED_TEST_DATA = String(process.env.SEED_TEST_DATA || "").trim() === "1";
+
 // Conexión a PostgreSQL
 const dbName = (process.env.DB_NAME || "cogniseguros").trim();
 const adminDbName = (process.env.DB_ADMIN_DB || "postgres").trim();
@@ -308,59 +312,65 @@ try {
     if (inserted.rowCount > 0) console.log(`  ✓ Plan: ${plan.nombre}`);
   }
 
-  // 6. Crear usuario de test
-  console.log("\n6️⃣  Creando usuarios de test...");
+  if (!SEED_TEST_DATA) {
+    console.log("\n6️⃣  Saltando usuarios de test (SEED_TEST_DATA=1 para crear)...");
+    console.log("\n7️⃣  Saltando suscripciones de test (SEED_TEST_DATA=1 para crear)...");
+  } else {
+    console.log("\n6️⃣  Creando usuarios de test...");
 
-  const passwordTest = await bcrypt.hash("123456", 10);
-  const passwordAdmin = await bcrypt.hash("admin123", 10);
+    const passwordTest = await bcrypt.hash("123456", 10);
+    const passwordAdmin = await bcrypt.hash("admin123", 10);
 
-  const userTest = await conn.query(
-    `INSERT INTO usuarios (nombre, email, password, rol)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (email) DO NOTHING
-     RETURNING id, email`,
-    ["Usuario Test", "test@test.com", passwordTest, "user"]
-  );
-  if (userTest.rows[0]) console.log(`  ✓ Usuario: test@test.com (contraseña: 123456)`);
-
-  const userAdmin = await conn.query(
-    `INSERT INTO usuarios (nombre, email, password, rol)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (email) DO NOTHING
-     RETURNING id, email`,
-    ["Admin", "admin@test.com", passwordAdmin, "admin"]
-  );
-  if (userAdmin.rows[0]) console.log(`  ✓ Usuario: admin@test.com (contraseña: admin123)`);
-
-  // 7. Crear suscripciones de test
-  console.log("\n7️⃣  Creando suscripciones de test...");
-
-  const fechaFin = new Date();
-  fechaFin.setMonth(fechaFin.getMonth() + 1);
-
-  // Crear suscripciones solo si se insertaron usuarios de test en esta corrida.
-  if (userTest.rows[0]) {
-    await conn.query(
-      `INSERT INTO suscripciones (aseguradora_id, plan_id, estado, fecha_fin)
-       VALUES ($1, $2, $3, $4)`,
-      [userTest.rows[0].id, 2, "ACTIVA", fechaFin]
+    const userTest = await conn.query(
+      `INSERT INTO usuarios (nombre, email, password, rol)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (email) DO NOTHING
+       RETURNING id, email`,
+      ["Usuario Test", "test@test.com", passwordTest, "user"]
     );
-    console.log("  ✓ Suscripción STARTER para usuario test");
+    if (userTest.rows[0]) console.log(`  ✓ Usuario: test@test.com (contraseña: 123456)`);
+
+    const userAdmin = await conn.query(
+      `INSERT INTO usuarios (nombre, email, password, rol)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (email) DO NOTHING
+       RETURNING id, email`,
+      ["Admin", "admin@test.com", passwordAdmin, "admin"]
+    );
+    if (userAdmin.rows[0]) console.log(`  ✓ Usuario: admin@test.com (contraseña: admin123)`);
+
+    console.log("\n7️⃣  Creando suscripciones de test...");
+    const fechaFin = new Date();
+    fechaFin.setMonth(fechaFin.getMonth() + 1);
+
+    // Crear suscripciones solo si se insertaron usuarios de test en esta corrida.
+    if (userTest.rows[0]) {
+      await conn.query(
+        `INSERT INTO suscripciones (aseguradora_id, plan_id, estado, fecha_fin)
+         VALUES ($1, $2, $3, $4)`,
+        [userTest.rows[0].id, 2, "ACTIVA", fechaFin]
+      );
+      console.log("  ✓ Suscripción STARTER para usuario test");
+    }
+
+    if (userAdmin.rows[0]) {
+      await conn.query(
+        `INSERT INTO suscripciones (aseguradora_id, plan_id, estado, fecha_fin)
+         VALUES ($1, $2, $3, $4)`,
+        [userAdmin.rows[0].id, 4, "ACTIVA", fechaFin]
+      );
+      console.log("  ✓ Suscripción ENTERPRISE para admin");
+    }
+
+    console.log("\n✅ ¡Setup completado exitosamente!\n");
+    console.log("📝 Credenciales de prueba:");
+    console.log("  - test@test.com / 123456 (Usuario regular)");
+    console.log("  - admin@test.com / admin123 (Admin - ver Dashboard)\n");
   }
 
-  if (userAdmin.rows[0]) {
-    await conn.query(
-      `INSERT INTO suscripciones (aseguradora_id, plan_id, estado, fecha_fin)
-       VALUES ($1, $2, $3, $4)`,
-      [userAdmin.rows[0].id, 4, "ACTIVA", fechaFin]
-    );
-    console.log("  ✓ Suscripción ENTERPRISE para admin");
+  if (!SEED_TEST_DATA) {
+    console.log("\n✅ ¡Setup completado exitosamente!\n");
   }
-
-  console.log("\n✅ ¡Setup completado exitosamente!\n");
-  console.log("📝 Credenciales de prueba:");
-  console.log("  - test@test.com / 123456 (Usuario regular)");
-  console.log("  - admin@test.com / admin123 (Admin - ver Dashboard)\n");
 
   // Cerrar conexión a la DB 'cogniseguros'
   conn.release();
