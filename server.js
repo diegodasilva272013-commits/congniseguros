@@ -589,6 +589,13 @@ const testUsers = {
 };
 
 // ======== DB CONNECTION ========
+console.log("🧩 DB config:", {
+  host: process.env.DB_HOST || "localhost",
+  port: Number(process.env.DB_PORT || 5432),
+  database: MASTER_DB_NAME,
+  user: process.env.DB_USER || "postgres",
+});
+
 const pool = new Pool({
   user: process.env.DB_USER || "postgres",
   host: process.env.DB_HOST || "localhost",
