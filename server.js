@@ -5,7 +5,7 @@ import pkg from "pg";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
-import { sendVerificationCode, verifyCode } from "./email-auth.js";
+import { sendCodeEmail, sendVerificationCode, verifyCode } from "./email-auth.js";
 import fs from "fs";
 import path from "path";
 
@@ -57,6 +57,82 @@ const clientLoginPending = new Map(); // key: "asegId:dni" -> { email, createdAt
 const clientLoginCooldown = new Map(); // key: "asegId:dni" -> lastSentMs
 
 const jwtSecret = process.env.JWT_SECRET || "secret_key_development";
+
+// ===== EMAIL CODES (DB-backed, production-safe) =====
+const normalizeEmailLower = (v) => String(v || "").trim().toLowerCase();
+
+const hashEmailCode = ({ email, purpose, code }) => {
+  const e = normalizeEmailLower(email);
+  const p = String(purpose || "").trim();
+  const c = String(code || "").trim();
+  return crypto
+    .createHmac("sha256", String(jwtSecret || ""))
+    .update(`${p}|${e}|${c}`)
+    .digest("hex");
+};
+
+const ensureEmailCodesTable = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_verification_codes (
+      id BIGSERIAL PRIMARY KEY,
+      email TEXT NOT NULL,
+      purpose TEXT NOT NULL,
+      code_hash TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_purpose_expires ON email_verification_codes(purpose, expires_at)"
+  );
+};
+
+const createEmailCodeAndSend = async ({ email, purpose }) => {
+  const emailNorm = normalizeEmailLower(email);
+  const p = String(purpose || "").trim();
+  if (!emailNorm || !emailNorm.includes("@")) throw new Error("Email inválido");
+  if (!p) throw new Error("purpose requerido");
+
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  const codeHash = hashEmailCode({ email: emailNorm, purpose: p, code });
+
+  await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
+  await pool.query(
+    "INSERT INTO email_verification_codes (email, purpose, code_hash, expires_at) VALUES ($1, $2, $3, $4)",
+    [emailNorm, p, codeHash, expiresAt]
+  );
+
+  await sendCodeEmail(emailNorm, code);
+  return { expiresAt };
+};
+
+const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
+  const p = String(purpose || "").trim();
+  const c = String(code || "").trim();
+  if (!p) return { valid: false, message: "Primero pedí el código" };
+  if (!c) return { valid: false, message: "Código requerido" };
+
+  const r = await pool.query(
+    "SELECT id, email, code_hash, expires_at FROM email_verification_codes WHERE purpose = $1 ORDER BY id DESC LIMIT 1",
+    [p]
+  );
+  const row = r.rows?.[0];
+  if (!row) return { valid: false, message: "Primero pedí el código" };
+
+  const exp = new Date(row.expires_at);
+  if (!(exp instanceof Date) || isNaN(exp.getTime()) || exp.getTime() < Date.now()) {
+    await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
+    return { valid: false, message: "Código expirado" };
+  }
+
+  const expected = String(row.code_hash || "");
+  const got = hashEmailCode({ email: row.email, purpose: p, code: c });
+  if (expected !== got) return { valid: false, message: "Código incorrecto" };
+
+  await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
+  return { valid: true, message: "Código verificado", email: row.email };
+};
 
 const getAuthUserIdFromReq = (req) => {
   const token = req.headers.authorization?.split(" ")?.[1];
@@ -625,6 +701,9 @@ pool.on("error", (err) => {
 pool.query("SELECT NOW()").then(() => {
   dbConnected = true;
   console.log("✅ PostgreSQL conectado");
+
+  // Códigos por email persistentes (evita fallos por memoria/instancias)
+  ensureEmailCodesTable().catch(() => {});
 
   // Asegurar columnas mínimas en master DB (migración liviana)
   pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS pais VARCHAR(2) DEFAULT 'AR'").catch(() => {});
@@ -1916,15 +1995,21 @@ app.post("/api/cliente/send-code", async (req, res) => {
       });
     }
 
-    const sent = await sendVerificationCode(email);
+    const purpose = `client:${Number(aseguradora_id)}:${normalizedDni}`;
+
     let emailWarning = "";
-    if (!sent?.success) {
-      const errorMsg = sent?.message || "EMAIL_SEND_FAIL: unknown";
-      console.log("[ERROR REAL EMAIL]", errorMsg, sent?.error || null);
-      return res.status(500).json({ status: "error", message: errorMsg, error: sent?.error || null });
+    if (dbConnected) {
+      await createEmailCodeAndSend({ email, purpose });
+    } else {
+      const sent = await sendVerificationCode(email);
+      if (!sent?.success) {
+        const errorMsg = sent?.message || "EMAIL_SEND_FAIL: unknown";
+        console.log("[ERROR REAL EMAIL]", errorMsg, sent?.error || null);
+        return res.status(500).json({ status: "error", message: errorMsg, error: sent?.error || null });
+      }
     }
     clientLoginCooldown.set(key, Date.now());
-    clientLoginPending.set(key, { email, createdAt: Date.now() });
+    clientLoginPending.set(key, { email, createdAt: Date.now(), purpose });
     res.json({
       status: "success",
       message: "Código enviado",
@@ -1948,12 +2033,20 @@ app.post("/api/cliente/verify-code", async (req, res) => {
 
     const normalizedDni = normalizeDigits(dni);
     const key = `${Number(aseguradora_id)}:${normalizedDni}`;
-    const pending = clientLoginPending.get(key);
-    if (!pending?.email) {
-      return res.status(400).json({ status: "error", message: "Primero pedí el código" });
+
+    const purpose = `client:${Number(aseguradora_id)}:${normalizedDni}`;
+
+    let v;
+    if (dbConnected) {
+      v = await verifyEmailCodeByPurpose({ purpose, code: String(code).trim() });
+    } else {
+      const pending = clientLoginPending.get(key);
+      if (!pending?.email) {
+        return res.status(400).json({ status: "error", message: "Primero pedí el código" });
+      }
+      v = verifyCode(pending.email, String(code).trim());
     }
 
-    const v = verifyCode(pending.email, String(code).trim());
     if (!v?.valid) {
       return res.status(401).json({ status: "error", message: v?.message || "Código inválido" });
     }
@@ -3330,7 +3423,15 @@ app.post("/send-code", async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ status: "error", message: "Email requerido" });
 
-    const result = await sendVerificationCode(email);
+    const emailRaw = String(email || "").trim();
+
+    if (dbConnected) {
+      const purpose = `aseg_login:${normalizeEmailLower(emailRaw)}`;
+      await createEmailCodeAndSend({ email: emailRaw, purpose });
+      return res.json({ status: "success", message: "Código enviado a tu email" });
+    }
+
+    const result = await sendVerificationCode(emailRaw);
     res.json({ status: result.success ? "success" : "error", message: result.message });
   } catch (err) {
     res.status(500).json({ status: "error", message: err.message });
@@ -3342,32 +3443,42 @@ app.post("/verify-code", async (req, res) => {
     const { email, code, pais } = req.body;
     if (!email || !code) return res.status(400).json({ status: "error", message: "Email y código requeridos" });
 
+    const emailRaw = String(email || "").trim();
+
     const paisNorm = ["AR", "UY"].includes(String(pais || "").toUpperCase())
       ? String(pais).toUpperCase()
       : "AR";
 
-    const result = verifyCode(email, code);
-    if (!result.valid) {
-      return res.status(401).json({ status: "error", message: result.message });
+    if (dbConnected) {
+      const purpose = `aseg_login:${normalizeEmailLower(emailRaw)}`;
+      const v = await verifyEmailCodeByPurpose({ purpose, code: String(code).trim() });
+      if (!v?.valid) {
+        return res.status(401).json({ status: "error", message: v?.message || "Código inválido" });
+      }
+    } else {
+      const result = verifyCode(emailRaw, String(code).trim());
+      if (!result.valid) {
+        return res.status(401).json({ status: "error", message: result.message });
+      }
     }
 
     // Buscar o crear usuario
-    let user = await pool.query("SELECT * FROM usuarios WHERE email = $1", [email]);
+    let user = await pool.query("SELECT * FROM usuarios WHERE email = $1", [emailRaw]);
 
     if (user.rows.length === 0) {
       // Crear usuario nuevo
       await pool.query(
         "INSERT INTO usuarios (nombre, email, password, rol, pais, paises) VALUES ($1, $2, $3, $4, $5, $6)",
         [
-          email.split("@")[0],
-          email,
+          emailRaw.split("@")[0],
+          emailRaw,
           await bcrypt.hash(crypto.randomBytes(16).toString("hex"), 10),
           "user",
           paisNorm,
           paisNorm,
         ]
       );
-      user = await pool.query("SELECT * FROM usuarios WHERE email = $1", [email]);
+      user = await pool.query("SELECT * FROM usuarios WHERE email = $1", [emailRaw]);
     }
 
     // Si ya existe pero no tiene pais/paises seteado, setearlo una vez
@@ -3377,7 +3488,7 @@ app.post("/verify-code", async (req, res) => {
       const currentPaises = String(current.paises || "").trim();
       if (!currentPais || !currentPaises) {
         await pool.query("UPDATE usuarios SET pais = $1, paises = COALESCE(NULLIF(TRIM(paises), ''), $1) WHERE id = $2", [paisNorm, current.id]);
-        user = await pool.query("SELECT * FROM usuarios WHERE email = $1", [email]);
+        user = await pool.query("SELECT * FROM usuarios WHERE email = $1", [emailRaw]);
       }
     }
 

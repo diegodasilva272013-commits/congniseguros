@@ -72,21 +72,12 @@ const sanitizeEmailError = (err) => {
 // Generar código de 6 dígitos
 const generateCode = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-// Enviar código por email
-export async function sendVerificationCode(email) {
-  try {
-    const code = generateCode();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutos
-
-    // Guardar en memoria
-    verificationCodes.set(email, { code, expiresAt });
-
-    // Enviar email
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: "Código de acceso - Cogniseguros",
-      html: `
+export async function sendCodeEmail(email, code) {
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to: email,
+    subject: "Código de acceso - Cogniseguros",
+    html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <div style="background-color: #1e293b; color: white; padding: 20px; border-radius: 8px; text-align: center;">
             <h2>Código de Acceso</h2>
@@ -95,7 +86,7 @@ export async function sendVerificationCode(email) {
           <div style="padding: 20px; text-align: center;">
             <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
               <p style="font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 0; color: #1e293b;">
-                ${code}
+                ${String(code || "").trim()}
               </p>
             </div>
             <p style="color: #64748b; font-size: 12px;">Este código expira en 10 minutos</p>
@@ -107,7 +98,19 @@ export async function sendVerificationCode(email) {
           </div>
         </div>
       `,
-    });
+  });
+}
+
+// Enviar código por email
+export async function sendVerificationCode(email) {
+  try {
+    const code = generateCode();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutos
+
+    // Guardar en memoria
+    verificationCodes.set(email, { code, expiresAt });
+
+    await sendCodeEmail(email, code);
 
     return { success: true, message: "Código enviado a tu email" };
   } catch (error) {
