@@ -98,6 +98,29 @@ const createEmailCodeAndSend = async ({ email, purpose }) => {
   if (!emailNorm || !emailNorm.includes("@")) throw new Error("Email inválido");
   if (!p) throw new Error("purpose requerido");
 
+  // Cooldown persistente: si ya existe un código vigente creado hace <60s,
+  // lo re-enviamos para evitar generar múltiples códigos distintos.
+  try {
+    const last = await pool.query(
+      "SELECT code_plain, expires_at, created_at FROM email_verification_codes WHERE purpose = $1 ORDER BY id DESC LIMIT 1",
+      [p]
+    );
+    const row = last.rows?.[0];
+    if (row?.expires_at && row?.created_at) {
+      const exp = new Date(row.expires_at);
+      const created = new Date(row.created_at);
+      const stillValid = exp instanceof Date && !isNaN(exp.getTime()) && exp.getTime() > Date.now();
+      const withinCooldown = created instanceof Date && !isNaN(created.getTime()) && Date.now() - created.getTime() < 60_000;
+      const existingCode = String(row.code_plain || "").trim();
+      if (stillValid && withinCooldown && existingCode) {
+        await sendCodeEmail(emailNorm, existingCode);
+        return { expiresAt: exp, reused: true };
+      }
+    }
+  } catch {
+    // no bloquear el flujo por problemas de cooldown
+  }
+
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
   const codeHash = hashEmailCode({ email: emailNorm, purpose: p, code });
@@ -109,7 +132,7 @@ const createEmailCodeAndSend = async ({ email, purpose }) => {
   );
 
   await sendCodeEmail(emailNorm, code);
-  return { expiresAt };
+  return { expiresAt, reused: false };
 };
 
 const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
@@ -136,48 +159,60 @@ const verifyEmailCodeByPurpose = async ({ purpose, code }) => {
     }
   })();
 
+  // Verificamos contra los últimos N códigos vigentes (evita fallos por emails fuera de orden / reintentos)
   const r = await pool.query(
-    "SELECT id, email, code_hash, code_plain, expires_at FROM email_verification_codes WHERE purpose = $1 ORDER BY id DESC LIMIT 1",
+    "SELECT id, email, code_hash, code_plain, expires_at FROM email_verification_codes WHERE purpose = $1 ORDER BY id DESC LIMIT 5",
     [p]
   );
-  const row = r.rows?.[0];
-  if (!row) {
+  const rows = Array.isArray(r.rows) ? r.rows : [];
+  if (rows.length === 0) {
     console.log("[EMAIL_CODE_VERIFY_FAIL] not_found", { purpose: safePurpose });
     return { valid: false, message: "Primero pedí el código" };
   }
 
-  const exp = new Date(row.expires_at);
-  if (!(exp instanceof Date) || isNaN(exp.getTime()) || exp.getTime() < Date.now()) {
+  let hasAnyUnexpired = false;
+  let matched = null;
+
+  for (const row of rows) {
+    const exp = new Date(row.expires_at);
+    const isUnexpired = exp instanceof Date && !isNaN(exp.getTime()) && exp.getTime() > Date.now();
+    if (!isUnexpired) continue;
+    hasAnyUnexpired = true;
+
+    const plain = String(row.code_plain || "").trim();
+    const plainDigits = plain.replace(/[^\d]/g, "");
+    if (plain && plainDigits === c) {
+      matched = row;
+      break;
+    }
+
+    // Fallback para filas viejas sin code_plain
+    if (!plain) {
+      const expected = String(row.code_hash || "");
+      const got = hashEmailCode({ email: row.email, purpose: p, code: c });
+      if (expected && expected === got) {
+        matched = row;
+        break;
+      }
+    }
+  }
+
+  if (!hasAnyUnexpired) {
     await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
     console.log("[EMAIL_CODE_VERIFY_FAIL] expired", { purpose: safePurpose });
     return { valid: false, message: "Código expirado" };
   }
 
-  const plain = String(row.code_plain || "").trim();
-  const plainDigits = plain.replace(/[^\d]/g, "");
-  if (plain) {
-    if (plainDigits !== c) {
-      console.log("[EMAIL_CODE_VERIFY_FAIL] mismatch_plain", {
-        purpose: safePurpose,
-        code_len: c.length,
-      });
-      return { valid: false, message: "Código incorrecto" };
-    }
-  } else {
-    // Fallback para filas viejas que solo tengan hash
-    const expected = String(row.code_hash || "");
-    const got = hashEmailCode({ email: row.email, purpose: p, code: c });
-    if (expected !== got) {
-      console.log("[EMAIL_CODE_VERIFY_FAIL] mismatch_hash", {
-        purpose: safePurpose,
-        code_len: c.length,
-      });
-      return { valid: false, message: "Código incorrecto" };
-    }
+  if (!matched) {
+    console.log("[EMAIL_CODE_VERIFY_FAIL] mismatch_plain", {
+      purpose: safePurpose,
+      code_len: c.length,
+    });
+    return { valid: false, message: "Código incorrecto" };
   }
 
   await pool.query("DELETE FROM email_verification_codes WHERE purpose = $1", [p]);
-  return { valid: true, message: "Código verificado", email: row.email };
+  return { valid: true, message: "Código verificado", email: matched.email };
 };
 
 const getAuthUserIdFromReq = (req) => {
