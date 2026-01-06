@@ -11,15 +11,23 @@ import path from "path";
 
 dotenv.config();
 
-// Para diagnosticar despliegues en EasyPanel: si no ves este build_id en /api/health,
-// el servicio NO está corriendo el último código del repo.
+// Para diagnosticar despliegues en EasyPanel: si no ves un build_id consistente en /api/health,
+// el servicio puede estar corriendo un build viejo o con env vars mal seteadas.
+const normalizeBuildId = (v) => {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  const low = s.toLowerCase();
+  if (low === "undefined" || low === "null") return "";
+  return s;
+};
+
 const APP_BUILD_ID =
-  process.env.APP_BUILD_ID ||
-  process.env.EASYPANEL_GIT_SHA ||
-  process.env.GIT_SHA ||
-  process.env.GIT_COMMIT ||
-  process.env.COMMIT_SHA ||
-  process.env.SOURCE_VERSION ||
+  normalizeBuildId(process.env.APP_BUILD_ID) ||
+  normalizeBuildId(process.env.EASYPANEL_GIT_SHA) ||
+  normalizeBuildId(process.env.GIT_SHA) ||
+  normalizeBuildId(process.env.GIT_COMMIT) ||
+  normalizeBuildId(process.env.COMMIT_SHA) ||
+  normalizeBuildId(process.env.SOURCE_VERSION) ||
   "unknown";
 
 const app = express();
