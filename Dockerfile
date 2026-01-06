@@ -36,6 +36,7 @@ COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/package.json ./package.json
 
 EXPOSE 5000
-ENV PORT=5000
+EXPOSE 80
+ENV PORT=80
 
 CMD ["node", "server.js"]
