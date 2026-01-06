@@ -1939,10 +1939,10 @@ export default function App() {
     }
   };
 
-  const clienteVerifyAndLogin = async () => {
-    const dni = String(clienteDni || "").trim();
-    const asegId = String(clienteSelectedAsegId || "").trim();
-    const code = clienteCodeDigits.join("").trim();
+  const clienteVerifyAndLogin = async (opts = {}) => {
+    const dni = String(opts?.dni ?? clienteDni ?? "").trim();
+    const asegId = String(opts?.asegId ?? clienteSelectedAsegId ?? "").trim();
+    const code = String(opts?.code ?? clienteCodeDigits.join("") ?? "").trim();
     if (!dni) return showMessage("Ingresá tu documento.", "error");
     if (!asegId) return showMessage("Elegí tu aseguradora.", "error");
     if (!code) return showMessage("Ingresá el código.", "error");
@@ -2759,7 +2759,7 @@ export default function App() {
                                   const key = `${asegId}:${dni}:${code}`;
                                   if (lastClientAutoVerifyRef.current !== key) {
                                     lastClientAutoVerifyRef.current = key;
-                                    clienteVerifyAndLogin();
+                                    clienteVerifyAndLogin({ dni, asegId, code });
                                   }
                                 }
                               }
