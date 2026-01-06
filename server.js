@@ -13,7 +13,14 @@ dotenv.config();
 
 // Para diagnosticar despliegues en EasyPanel: si no ves este build_id en /api/health,
 // el servicio NO está corriendo el último código del repo.
-const APP_BUILD_ID = process.env.APP_BUILD_ID || "26fe8b4";
+const APP_BUILD_ID =
+  process.env.APP_BUILD_ID ||
+  process.env.EASYPANEL_GIT_SHA ||
+  process.env.GIT_SHA ||
+  process.env.GIT_COMMIT ||
+  process.env.COMMIT_SHA ||
+  process.env.SOURCE_VERSION ||
+  "unknown";
 
 const app = express();
 app.use(cors());
