@@ -580,6 +580,15 @@ export default function App() {
   const [codeDigits, setCodeDigits] = useState(["", "", "", "", "", ""]);
   const authFormRef = useRef(null);
 
+  const getTrialDaysLeft = (trialExpiresAt) => {
+    if (!trialExpiresAt) return null;
+    const d = new Date(trialExpiresAt);
+    if (Number.isNaN(d.getTime())) return null;
+    const diffMs = d.getTime() - Date.now();
+    const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    return days;
+  };
+
   // Data
   const [clients, setClients] = useState([]);
 
@@ -3285,6 +3294,16 @@ export default function App() {
                 <div className="hidden sm:block text-left leading-tight min-w-0 max-w-[260px]">
                   <div className="text-xs font-black truncate">{user?.nombre}</div>
                   <div className="text-[11px] text-[var(--muted)] truncate">{user?.email}</div>
+                  {(() => {
+                    const daysLeft = getTrialDaysLeft(user?.trial_expires_at);
+                    if (daysLeft == null) return null;
+                    if (daysLeft <= 0) return null;
+                    return (
+                      <div className="mt-1 inline-flex items-center gap-2 px-2 py-0.5 rounded-lg border border-[rgba(63,209,255,.45)] bg-[rgba(255,255,255,.04)] text-[11px] font-black">
+                        Versión de prueba · {daysLeft} día{daysLeft === 1 ? "" : "s"} restantes
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>

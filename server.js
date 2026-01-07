@@ -1495,6 +1495,10 @@ app.post("/api/auth/login", async (req, res) => {
         rol: user.rol,
         pais: user.pais || "AR",
         paises: user.paises || user.pais || "AR",
+        trial_started_at: user.trial_started_at || null,
+        trial_expires_at: user.trial_expires_at || null,
+        blocked_at: user.blocked_at || null,
+        blocked_reason: user.blocked_reason || null,
         profile_photo_dataurl: getProfilePhotoDataUrlFromUserRow(user),
       },
       message: "✅ Login exitoso",
@@ -1613,6 +1617,10 @@ app.post("/api/auth/verify-2fa", async (req, res) => {
         rol: user.rol,
         pais: user.pais || "AR",
         paises: user.paises || user.pais || "AR",
+        trial_started_at: user.trial_started_at || null,
+        trial_expires_at: user.trial_expires_at || null,
+        blocked_at: user.blocked_at || null,
+        blocked_reason: user.blocked_reason || null,
         profile_photo_dataurl: getProfilePhotoDataUrlFromUserRow(user),
       },
       message: "Login exitoso",
@@ -3777,6 +3785,15 @@ app.post("/send-code", async (req, res) => {
     const emailRaw = String(email || "").trim();
 
     if (dbConnected) {
+      // Seguridad: no enviar códigos si el email no existe como usuario.
+      // Para evitar enumeración, respondemos success igual.
+      const exists = await pool.query("SELECT 1 FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1", [emailRaw]);
+      if (exists.rows.length === 0) {
+        return res.json({
+          status: "success",
+          message: "Si el email está registrado, te enviamos un código.",
+        });
+      }
       const purpose = `aseg_login:${normalizeEmailLower(emailRaw)}`;
       await createEmailCodeAndSend({ email: emailRaw, purpose });
       return res.json({ status: "success", message: "Código enviado a tu email" });
@@ -3813,34 +3830,10 @@ app.post("/verify-code", async (req, res) => {
       }
     }
 
-    // Buscar o crear usuario
-    let user = await pool.query("SELECT * FROM usuarios WHERE email = $1", [emailRaw]);
-
+    // Seguridad: auth por email solo para usuarios ya existentes.
+    const user = await pool.query("SELECT * FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1", [emailRaw]);
     if (user.rows.length === 0) {
-      // Crear usuario nuevo
-      await pool.query(
-        "INSERT INTO usuarios (nombre, email, password, rol, pais, paises) VALUES ($1, $2, $3, $4, $5, $6)",
-        [
-          emailRaw.split("@")[0],
-          emailRaw,
-          await bcrypt.hash(crypto.randomBytes(16).toString("hex"), 10),
-          "user",
-          paisNorm,
-          paisNorm,
-        ]
-      );
-      user = await pool.query("SELECT * FROM usuarios WHERE email = $1", [emailRaw]);
-    }
-
-    // Si ya existe pero no tiene pais/paises seteado, setearlo una vez
-    if (user.rows.length > 0) {
-      const current = user.rows[0];
-      const currentPais = String(current.pais || "").trim();
-      const currentPaises = String(current.paises || "").trim();
-      if (!currentPais || !currentPaises) {
-        await pool.query("UPDATE usuarios SET pais = $1, paises = COALESCE(NULLIF(TRIM(paises), ''), $1) WHERE id = $2", [paisNorm, current.id]);
-        user = await pool.query("SELECT * FROM usuarios WHERE email = $1", [emailRaw]);
-      }
+      return res.status(401).json({ status: "error", message: "Email no registrado" });
     }
 
     const userData = user.rows[0];
@@ -3866,6 +3859,10 @@ app.post("/verify-code", async (req, res) => {
         rol: userData.rol,
         pais: userData.pais || "AR",
         paises: userData.paises || userData.pais || "AR",
+        trial_started_at: userData.trial_started_at || null,
+        trial_expires_at: userData.trial_expires_at || null,
+        blocked_at: userData.blocked_at || null,
+        blocked_reason: userData.blocked_reason || null,
         profile_photo_dataurl: getProfilePhotoDataUrlFromUserRow(userData),
       },
       token,
