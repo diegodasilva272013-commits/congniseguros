@@ -3900,6 +3900,24 @@ app.post("/auth/invite/claim", async (req, res) => {
 
       const userId = userResult.rows[0].id;
 
+      // Aplicar trial por invitación al usuario ya creado (si aún no tiene trial cargado).
+      try {
+        const trialDaysRaw = Number(invitacion?.trial_days ?? 0);
+        const trialDays = Number.isFinite(trialDaysRaw) && trialDaysRaw > 0 ? Math.min(30, Math.floor(trialDaysRaw)) : 0;
+        if (trialDays > 0) {
+          await client.query(
+            `UPDATE usuarios
+             SET
+               trial_started_at = COALESCE(trial_started_at, NOW()),
+               trial_expires_at = COALESCE(trial_expires_at, NOW() + make_interval(days => $2))
+             WHERE id = $1`,
+            [userId, trialDays]
+          );
+        }
+      } catch {
+        // no bloquear claim por fallas de compatibilidad en DB
+      }
+
       // Marcar invitación como usada. Si falta la columna o hay mismatch de tipos, no romper el flujo.
       try {
         const canSetAsegId = await hasColumn({ tableName: "invitaciones", columnName: "aseguradora_id" });
