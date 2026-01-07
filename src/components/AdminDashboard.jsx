@@ -204,6 +204,13 @@ export default function AdminDashboard() {
     const pais = normalizePais(modalData.pais);
     const paises = paisesFromFlags(modalData.paisesFlags, pais);
 
+    const cantidadRaw = Number(modalData.cantidad ?? 1);
+    const cantidad = Number.isFinite(cantidadRaw) && cantidadRaw > 0 ? Math.min(50, Math.floor(cantidadRaw)) : 1;
+    const diasExpRaw = Number(modalData.dias_expiracion ?? 30);
+    const dias_expiracion = Number.isFinite(diasExpRaw) && diasExpRaw > 0 ? Math.min(365, Math.floor(diasExpRaw)) : 30;
+    const diasTrialRaw = Number(modalData.dias_trial ?? 0);
+    const dias_trial = Number.isFinite(diasTrialRaw) && diasTrialRaw > 0 ? Math.min(30, Math.floor(diasTrialRaw)) : null;
+
     setLoading(true);
     try {
       const token = localStorage.getItem("token");
@@ -214,7 +221,15 @@ export default function AdminDashboard() {
         {
           method: "POST",
           headers,
-          body: JSON.stringify({ email, plan_id, pais, paises }),
+          body: JSON.stringify({
+            email,
+            plan_id: Number(plan_id),
+            pais,
+            paises,
+            cantidad,
+            dias_expiracion,
+            ...(dias_trial ? { dias_trial } : {}),
+          }),
         }
       );
 
@@ -432,6 +447,9 @@ export default function AdminDashboard() {
                 setModalData({
                   pais: "AR",
                   paisesFlags: { AR: true, UY: false },
+                  cantidad: 1,
+                  dias_expiracion: 30,
+                  dias_trial: 2,
                 });
               }}
               className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 flex items-center gap-2"
@@ -463,6 +481,9 @@ export default function AdminDashboard() {
                         Plan
                       </th>
                       <th className="px-4 py-3 text-left text-sm font-bold">
+                        Trial (días)
+                      </th>
+                      <th className="px-4 py-3 text-left text-sm font-bold">
                         País
                       </th>
                       <th className="px-4 py-3 text-left text-sm font-bold">
@@ -482,8 +503,9 @@ export default function AdminDashboard() {
                   <tbody>
                     {filteredData.map((row) => (
                       <tr key={row.id} className="border-b hover:bg-gray-50">
-                        <td className="px-4 py-3">{row.email}</td>
+                        <td className="px-4 py-3">{row.email_asignado || row.email || "-"}</td>
                         <td className="px-4 py-3">{row.plan_nombre}</td>
+                        <td className="px-4 py-3">{row.trial_days ?? "-"}</td>
                         <td className="px-4 py-3">{row.pais || "AR"}</td>
                         <td className="px-4 py-3">{row.paises || row.pais || "AR"}</td>
                         <td className="px-4 py-3 font-mono text-sm">
@@ -918,9 +940,16 @@ export default function AdminDashboard() {
                 <label className="block text-sm font-bold mb-2">Plan</label>
                 <select
                   value={modalData.plan_id || ""}
-                  onChange={(e) =>
-                    setModalData({ ...modalData, plan_id: e.target.value })
-                  }
+                  onChange={(e) => {
+                    const nextPlan = e.target.value;
+                    const curTrial = modalData.dias_trial;
+                    const shouldDefaultTrial = String(nextPlan) === "1" && (!curTrial || Number(curTrial) <= 0);
+                    setModalData({
+                      ...modalData,
+                      plan_id: nextPlan,
+                      ...(shouldDefaultTrial ? { dias_trial: 2 } : {}),
+                    });
+                  }}
                   className="w-full p-2 border border-gray-300 rounded"
                 >
                   <option value="">Selecciona un plan</option>
@@ -929,6 +958,44 @@ export default function AdminDashboard() {
                   <option value="3">PROFESSIONAL</option>
                   <option value="4">ENTERPRISE</option>
                 </select>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-sm font-bold mb-2">Cantidad</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={modalData.cantidad ?? 1}
+                    onChange={(e) => setModalData({ ...modalData, cantidad: e.target.value })}
+                    className="w-full p-2 border border-gray-300 rounded"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold mb-2">Expira (días)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={modalData.dias_expiracion ?? 30}
+                    onChange={(e) => setModalData({ ...modalData, dias_expiracion: e.target.value })}
+                    className="w-full p-2 border border-gray-300 rounded"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold mb-2">Trial (días)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={30}
+                    value={modalData.dias_trial ?? 2}
+                    onChange={(e) => setModalData({ ...modalData, dias_trial: e.target.value })}
+                    className="w-full p-2 border border-gray-300 rounded"
+                  />
+                </div>
               </div>
 
               <div>
