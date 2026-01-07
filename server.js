@@ -568,6 +568,14 @@ const ensureInvitacionesPaisSchema = async () => {
     // Compat: en el código se usan ambos nombres.
     await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS email TEXT");
     await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS email_asignado TEXT");
+    // Campos usados por el flujo de claim (sin registro) y por admin.
+    await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS usado BOOLEAN DEFAULT false");
+    await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS expira_en TIMESTAMP");
+    await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS plan_id INT");
+    // Importante: algunas instalaciones tienen usuarios.id INT, otras UUID.
+    // Guardamos referencias como TEXT para no romper por tipos.
+    await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS aseguradora_id TEXT");
+    await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS creado_por TEXT");
     // Compat: auditoría de uso de invitación
     await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS fecha_uso TIMESTAMP");
     // Trial por invitación (días)
@@ -874,6 +882,15 @@ pool.query("SELECT NOW()").then(() => {
   dbConnected = true;
   console.log("✅ PostgreSQL conectado");
 
+  // Diagnóstico: confirmar DB/schema real en logs (útil en EasyPanel cuando hay varias DBs)
+  pool
+    .query("SELECT current_database() as db, current_schema() as schema")
+    .then((r) => {
+      const row = r?.rows?.[0];
+      if (row?.db) console.log("🧩 Connected DB:", row);
+    })
+    .catch(() => {});
+
   // Códigos por email persistentes (evita fallos por memoria/instancias)
   ensureEmailCodesTable().catch(() => {});
 
@@ -889,6 +906,14 @@ pool.query("SELECT NOW()").then(() => {
   // Invitaciones: permitir setear pais/paises desde admin (DBs viejas no lo tienen)
   pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS pais VARCHAR(2)").catch(() => {});
   pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS paises TEXT").catch(() => {});
+  // Invitaciones: columnas usadas por claim + admin
+  pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS usado BOOLEAN DEFAULT false").catch(() => {});
+  pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS expira_en TIMESTAMP").catch(() => {});
+  pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS plan_id INT").catch(() => {});
+  pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS aseguradora_id TEXT").catch(() => {});
+  pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS creado_por TEXT").catch(() => {});
+  pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS fecha_uso TIMESTAMP").catch(() => {});
+  pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS trial_days INT").catch(() => {});
   pool.query("UPDATE invitaciones SET pais = 'AR' WHERE pais IS NULL OR TRIM(pais) = ''").catch(() => {});
   pool.query("UPDATE invitaciones SET paises = COALESCE(NULLIF(TRIM(paises), ''), pais) WHERE paises IS NULL OR TRIM(paises) = ''").catch(() => {});
 
@@ -1043,6 +1068,21 @@ const logAudit = async (userId, accion, recurso, detalles = {}) => {
     );
   } catch (err) {
     console.error("Error logging audit:", err);
+  }
+};
+
+const hasColumn = async ({ tableName, columnName }) => {
+  try {
+    const t = String(tableName || "").trim();
+    const c = String(columnName || "").trim();
+    if (!t || !c) return false;
+    const r = await pool.query(
+      "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2 LIMIT 1",
+      [t, c]
+    );
+    return (r.rows?.length || 0) > 0;
+  } catch {
+    return false;
   }
 };
 
@@ -1380,13 +1420,24 @@ const enviarSMS = async (telefono, codigo) => {
 
 // ======== RUTAS ========
 
-app.get("/api/health", (req, res) => {
+app.get("/api/health", async (req, res) => {
+  let dbInfo = null;
+  if (dbConnected) {
+    try {
+      const r = await pool.query("SELECT current_database() as db, current_schema() as schema");
+      dbInfo = r.rows?.[0] || null;
+    } catch {
+      dbInfo = null;
+    }
+  }
+
   res.json({
     status: "success",
     message: "SegurosPro Backend ONLINE",
     started_at: APP_STARTED_AT,
     build_id: APP_BUILD_ID,
     db_connected: dbConnected,
+    db: dbInfo,
     email_codes_mode: dbConnected ? "db" : "mem",
   });
 });
@@ -1850,10 +1901,19 @@ app.post("/api/auth/register", async (req, res) => {
       const userId = userResult.rows[0].id;
 
       // Marcar invitación como usada
-      await client.query(
-        "UPDATE invitaciones SET usado = true, fecha_uso = NOW(), aseguradora_id = $1 WHERE id = $2",
-        [userId, invitacion.id]
-      );
+      try {
+        const canSetAsegId = await hasColumn({ tableName: "invitaciones", columnName: "aseguradora_id" });
+        if (canSetAsegId) {
+          await client.query(
+            "UPDATE invitaciones SET usado = true, fecha_uso = NOW(), aseguradora_id = $1 WHERE id = $2",
+            [String(userId), invitacion.id]
+          );
+        } else {
+          await client.query("UPDATE invitaciones SET usado = true, fecha_uso = NOW() WHERE id = $1", [invitacion.id]);
+        }
+      } catch {
+        await client.query("UPDATE invitaciones SET usado = true, fecha_uso = NOW() WHERE id = $1", [invitacion.id]);
+      }
 
       // Crear suscripción según plan de invitación
       const fechaInicio = new Date();
@@ -3840,10 +3900,20 @@ app.post("/auth/invite/claim", async (req, res) => {
 
       const userId = userResult.rows[0].id;
 
-      await client.query(
-        "UPDATE invitaciones SET usado = true, fecha_uso = NOW(), aseguradora_id = $1 WHERE id = $2",
-        [userId, invitacion.id]
-      );
+      // Marcar invitación como usada. Si falta la columna o hay mismatch de tipos, no romper el flujo.
+      try {
+        const canSetAsegId = await hasColumn({ tableName: "invitaciones", columnName: "aseguradora_id" });
+        if (canSetAsegId) {
+          await client.query(
+            "UPDATE invitaciones SET usado = true, fecha_uso = NOW(), aseguradora_id = $1 WHERE id = $2",
+            [String(userId), invitacion.id]
+          );
+        } else {
+          await client.query("UPDATE invitaciones SET usado = true, fecha_uso = NOW() WHERE id = $1", [invitacion.id]);
+        }
+      } catch {
+        await client.query("UPDATE invitaciones SET usado = true, fecha_uso = NOW() WHERE id = $1", [invitacion.id]);
+      }
 
       await client.query("COMMIT");
     } catch (err) {

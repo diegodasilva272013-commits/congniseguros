@@ -8,15 +8,6 @@ export default function DeveloperAdmin({ onExit }) {
   const [loading, setLoading] = useState(false);
   const [hasToken, setHasToken] = useState(false);
 
-  useEffect(() => {
-    try {
-      const t = localStorage.getItem("token");
-      setHasToken(!!t);
-    } catch {
-      setHasToken(false);
-    }
-  }, []);
-
   const logout = () => {
     try {
       localStorage.removeItem("token");
