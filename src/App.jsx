@@ -11,7 +11,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import AdminDashboard from "./components/AdminDashboard.jsx";
 import DeveloperAdmin from "./components/DeveloperAdmin.jsx";
-import LoginWith2FA from "./components/LoginWith2FA.jsx";
 import * as XLSX from "xlsx";
 import {
   Shield,
@@ -580,6 +579,13 @@ export default function App() {
   const [emailStep, setEmailStep] = useState(null); // null | "email" | "code"
   const [codeDigits, setCodeDigits] = useState(["", "", "", "", "", ""]);
   const authFormRef = useRef(null);
+
+  // Auth por invitación (solo para crear acceso con código; luego entra por email+código)
+  const [asegAuthMode, setAsegAuthMode] = useState("email"); // email | invite
+  const [inviteCode, setInviteCode] = useState("");
+  const [inviteNombre, setInviteNombre] = useState("");
+  const [invitePais, setInvitePais] = useState("AR");
+  const [invitePassword, setInvitePassword] = useState("");
 
   const getTrialDaysLeft = (trialExpiresAt) => {
     if (!trialExpiresAt) return null;
@@ -3115,15 +3121,299 @@ export default function App() {
             <p className="text-slate-500 text-sm mt-1">Panel Aseguradora</p>
           </div>
 
-          <LoginWith2FA
-            onLoginSuccess={(u) => {
-              setUser(u);
-              setMode("dashboard");
-              setMenu("cartera");
-              loadClients(u.id);
-              showMessage(`Bienvenido ${u.nombre || u.email}`, "success");
-            }}
-          />
+          <div className="flex p-1 bg-slate-100 rounded-xl mb-8">
+            <button
+              type="button"
+              onClick={() => {
+                setAsegAuthMode("email");
+              }}
+              className="flex-1 py-3 text-sm font-black rounded-lg bg-white text-blue-600 shadow-sm"
+            >
+              Iniciar sesión
+            </button>
+          </div>
+
+          <form ref={authFormRef} className="space-y-5">
+            {asegAuthMode === "invite" ? (
+              <>
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded text-sm text-blue-900">
+                  Ingresá tu <b>código de invitación</b> para crear el acceso. Luego ingresás por email con código.
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-700">Código de invitación</label>
+                  <input
+                    type="text"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(String(e.target.value || "").toUpperCase())}
+                    className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none font-mono"
+                    placeholder="ABC123"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-700">Nombre / Empresa</label>
+                  <input
+                    type="text"
+                    value={inviteNombre}
+                    onChange={(e) => setInviteNombre(e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
+                    placeholder="Tu nombre o empresa"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-700">País</label>
+                  <select
+                    value={invitePais}
+                    onChange={(e) => setInvitePais(e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
+                  >
+                    <option value="AR">🇦🇷 Argentina</option>
+                    <option value="UY">🇺🇾 Uruguay</option>
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-700">Nueva contraseña</label>
+                  <input
+                    type="password"
+                    value={invitePassword}
+                    onChange={(e) => setInvitePassword(e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
+                    placeholder="Mínimo 6 caracteres"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const codigo_invitacion = String(inviteCode || "").trim().toUpperCase();
+                    const nombre = String(inviteNombre || "").trim();
+                    const password = String(invitePassword || "");
+                    const pais = String(invitePais || "AR").trim().toUpperCase() === "UY" ? "UY" : "AR";
+
+                    if (!codigo_invitacion || codigo_invitacion.length < 6) {
+                      return showMessage("Código de invitación inválido", "error");
+                    }
+                    if (!password || password.length < 6) {
+                      return showMessage("La contraseña debe tener al menos 6 caracteres", "error");
+                    }
+
+                    setLoading(true);
+                    try {
+                      const regRes = await fetch("/api/auth/register", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ codigo_invitacion, password, nombre, pais }),
+                      });
+                      const regData = await regRes.json().catch(() => null);
+
+                      if (!regData || regData.status !== "success") {
+                        const msg = regData?.message || "No se pudo aceptar la invitación";
+                        if (String(msg).toLowerCase().includes("ya") && String(msg).toLowerCase().includes("registr")) {
+                          showMessage("Ese email ya está registrado. Ingresá con tu email y pedí el código.", "error");
+                        } else {
+                          showMessage(msg, "error");
+                        }
+                        return;
+                      }
+
+                      const createdEmail = String(regData?.user?.email || "").trim();
+                      if (!createdEmail) {
+                        showMessage("Invitación aceptada, pero falta el email. Contactá soporte.", "error");
+                        return;
+                      }
+
+                      // Después de aceptar invitación, se entra por email + código.
+                      // Disparamos el envío y pasamos directo al paso de código.
+                      const res = await fetch("/send-code", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ email: createdEmail }),
+                      });
+                      const raw = await res.text();
+                      const data = raw ? JSON.parse(raw) : { status: "error", message: "Respuesta vacía del servidor" };
+
+                      setEmailStep(createdEmail);
+                      setCodeDigits(["", "", "", "", "", ""]);
+                      setAsegAuthMode("email");
+                      showMessage(data?.message || "Te enviamos un código a tu email.", data?.status === "success" ? "success" : "info");
+                    } catch (e) {
+                      showMessage(e.message, "error");
+                    } finally {
+                      setLoading(false);
+                    }
+                  }}
+                  disabled={loading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-2xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-60"
+                >
+                  {loading ? <Loader2 className="animate-spin" /> : <Send size={18} />}
+                  Aceptar invitación
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAsegAuthMode("email");
+                  }}
+                  className="w-full bg-slate-200 hover:bg-slate-300 text-slate-700 font-black py-2 rounded-2xl text-sm"
+                >
+                  Volver
+                </button>
+              </>
+            ) : (
+              <>
+                {/* STEP 1: EMAIL */}
+                {!emailStep && (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-xs font-black text-slate-700">Email</label>
+                      <input
+                        id="emailInput"
+                        type="email"
+                        required
+                        className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
+                        placeholder="tu@email.com"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-black text-slate-700">País</label>
+                      <select
+                        value={authPais}
+                        onChange={(e) => setAuthPais(e.target.value)}
+                        className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
+                      >
+                        <option value="AR">🇦🇷 Argentina</option>
+                        <option value="UY">🇺🇾 Uruguay</option>
+                      </select>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const email = document.getElementById("emailInput").value;
+                        if (!email) return showMessage("Ingresá tu email", "error");
+                        setLoading(true);
+                        try {
+                          const res = await fetch("/send-code", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ email }),
+                          });
+                          const raw = await res.text();
+                          const data = raw ? JSON.parse(raw) : { status: "error", message: "Respuesta vacía del servidor" };
+                          if (data.status === "success") {
+                            setEmailStep(email);
+                            showMessage(data.message || "Código enviado", "success");
+                          } else {
+                            showMessage(data.message, "error");
+                          }
+                        } catch (e) {
+                          showMessage(e.message, "error");
+                        } finally {
+                          setLoading(false);
+                        }
+                      }}
+                      disabled={loading}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-2xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      {loading ? <Loader2 className="animate-spin" /> : <Send size={18} />}
+                      Enviar código
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAsegAuthMode("invite");
+                      }}
+                      className="w-full text-blue-600 hover:underline text-sm font-black"
+                    >
+                      Tengo código de invitación
+                    </button>
+                  </>
+                )}
+
+                {/* STEP 2: CÓDIGO */}
+                {emailStep && (
+                  <>
+                    <div className="text-center mb-4">
+                      <p className="text-sm font-black text-slate-700">Ingresa el código de {emailStep}</p>
+                    </div>
+
+                    <div className="flex gap-2 justify-center mb-4">
+                      {codeDigits.map((digit, idx) => (
+                        <input
+                          key={idx}
+                          type="text"
+                          maxLength="1"
+                          value={digit}
+                          onChange={(e) => {
+                            const newDigits = [...codeDigits];
+                            newDigits[idx] = e.target.value.slice(0, 1);
+                            setCodeDigits(newDigits);
+                            if (e.target.value && idx < 5) {
+                              document.getElementById(`digit-${idx + 1}`).focus();
+                            }
+
+                            // Auto-verificar al completar el 6º dígito (sin quitar el botón)
+                            if (idx === 5 && e.target.value) {
+                              const code = newDigits.join("");
+                              if (code.length === 6 && emailStep) {
+                                const key = `${emailStep}:${code}`;
+                                if (lastAutoVerifyRef.current !== key) {
+                                  lastAutoVerifyRef.current = key;
+                                  verifyAseguradoraEmailCode({ email: emailStep, code });
+                                }
+                              }
+                            }
+                          }}
+                          id={`digit-${idx}`}
+                          className="w-12 h-12 px-0 py-0 bg-white border-2 border-slate-300 rounded-xl outline-none text-center text-lg font-black text-slate-900"
+                        />
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const code = codeDigits.join("");
+                        if (code.length !== 6) return showMessage("Completa los 6 dígitos", "error");
+                        verifyAseguradoraEmailCode({ email: emailStep, code });
+                      }}
+                      disabled={loading || codeDigits.join("").length !== 6}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-2xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      {loading ? <Loader2 className="animate-spin" /> : <Send size={18} />}
+                      Verificar
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEmailStep(null);
+                        setCodeDigits(["", "", "", "", "", ""]);
+                      }}
+                      className="w-full bg-slate-200 hover:bg-slate-300 text-slate-700 font-black py-2 rounded-2xl text-sm"
+                    >
+                      Volver
+                    </button>
+                  </>
+                )}
+
+                {!emailStep && (
+                  <button
+                    type="button"
+                    onClick={openSupport}
+                    className="w-full bg-slate-900 hover:bg-black text-white font-black py-3 rounded-2xl shadow flex items-center justify-center gap-2"
+                  >
+                    <MessageCircle size={18} /> Contactar soporte
+                  </button>
+                )}
+              </>
+            )}
+          </form>
         </div>
       </div>
     );
@@ -3155,16 +3445,6 @@ export default function App() {
                 <div className="hidden sm:block text-left leading-tight min-w-0 max-w-[260px]">
                   <div className="text-xs font-black truncate">{user?.nombre}</div>
                   <div className="text-[11px] text-[var(--muted)] truncate">{user?.email}</div>
-                  {(() => {
-                    const daysLeft = getTrialDaysLeft(user?.trial_expires_at);
-                    if (daysLeft == null) return null;
-                    if (daysLeft <= 0) return null;
-                    return (
-                      <div className="mt-1 inline-flex items-center gap-2 px-2 py-0.5 rounded-lg border border-[rgba(63,209,255,.45)] bg-[rgba(255,255,255,.04)] text-[11px] font-black">
-                        Versión de prueba · {daysLeft} día{daysLeft === 1 ? "" : "s"} restantes
-                      </div>
-                    );
-                  })()}
                 </div>
               </div>
             </div>
