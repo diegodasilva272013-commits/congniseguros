@@ -568,6 +568,8 @@ const ensureInvitacionesPaisSchema = async () => {
     // Compat: en el código se usan ambos nombres.
     await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS email TEXT");
     await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS email_asignado TEXT");
+    // Compat: auditoría de uso de invitación
+    await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS fecha_uso TIMESTAMP");
     // Trial por invitación (días)
     await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS trial_days INT");
     // Backfill para que no queden vacíos si se decide usarlos.
@@ -3787,6 +3789,8 @@ app.post("/auth/invite/claim", async (req, res) => {
     if (!codigo) return res.status(400).json({ status: "error", message: "Código de invitación requerido" });
     if (!emailRaw) return res.status(400).json({ status: "error", message: "Email requerido" });
     if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    await ensureInvitacionesPaisSchema();
 
     const client = await pool.connect();
     try {
