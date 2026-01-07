@@ -527,6 +527,11 @@ const ensureInvitacionesPaisSchema = async () => {
     // Invitaciones puede existir en DBs viejas sin estos campos.
     await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS pais VARCHAR(2)");
     await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS paises TEXT");
+    // Compat: en el código se usan ambos nombres.
+    await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS email TEXT");
+    await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS email_asignado TEXT");
+    // Trial por invitación (días)
+    await pool.query("ALTER TABLE invitaciones ADD COLUMN IF NOT EXISTS trial_days INT");
     // Backfill para que no queden vacíos si se decide usarlos.
     await pool.query("UPDATE invitaciones SET pais = 'AR' WHERE pais IS NULL OR TRIM(pais) = ''");
     await pool.query("UPDATE invitaciones SET paises = COALESCE(NULLIF(TRIM(paises), ''), pais) WHERE paises IS NULL OR TRIM(paises) = ''");
@@ -917,6 +922,12 @@ const checkMembership = async (req, res, next) => {
     const userId = req.body.aseguradora_id || req.query.aseguradora_id;
     if (!userId) {
       return res.status(401).json({ status: "error", message: "aseguradora_id requerido" });
+    }
+
+    // Trial/bloqueo: cortar antes de membresía.
+    const access = await enforceUserNotBlockedOrExpiredTrial(userId);
+    if (!access.ok) {
+      return res.status(access.status || 403).json({ status: "error", message: access.message });
     }
 
     // Verificar que existe el usuario
@@ -1746,7 +1757,7 @@ app.post("/api/auth/register", async (req, res) => {
     }
 
     const invitacion = invResult.rows[0];
-    const email = invitacion.email_asignado;
+    const email = invitacion.email_asignado || invitacion.email;
 
     if (!email) {
       return res.status(400).json({
@@ -1756,6 +1767,9 @@ app.post("/api/auth/register", async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+
+    const trialDaysRaw = Number(invitacion?.trial_days ?? 0);
+    const trialDays = Number.isFinite(trialDaysRaw) && trialDaysRaw > 0 ? Math.min(30, Math.floor(trialDaysRaw)) : 0;
 
     const paisFromBody = String(pais || "").trim();
     const paisFromInvite = String(invitacion?.pais || "").trim();
@@ -1768,8 +1782,17 @@ app.post("/api/auth/register", async (req, res) => {
       await client.query("BEGIN");
 
       const userResult = await client.query(
-        "INSERT INTO usuarios (nombre, email, password, rol, pais, paises) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, nombre, email, pais, paises",
-        [nombre || "Aseguradora", email, hashedPassword, "aseguradora", paisNorm, paisesNorm]
+        "INSERT INTO usuarios (nombre, email, password, rol, pais, paises, trial_started_at, trial_expires_at, blocked_at, blocked_reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL) RETURNING id, nombre, email, pais, paises, trial_started_at, trial_expires_at",
+        [
+          nombre || "Aseguradora",
+          email,
+          hashedPassword,
+          "aseguradora",
+          paisNorm,
+          paisesNorm,
+          trialDays ? new Date() : null,
+          trialDays ? new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000) : null,
+        ]
       );
 
       const userId = userResult.rows[0].id;
@@ -1782,8 +1805,10 @@ app.post("/api/auth/register", async (req, res) => {
 
       // Crear suscripción según plan de invitación
       const fechaInicio = new Date();
-      const fechaFin = new Date();
-      fechaFin.setMonth(fechaFin.getMonth() + 1); // 1 mes gratis o según plan
+      const fechaFin = trialDays ? new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000) : new Date();
+      if (!trialDays) {
+        fechaFin.setMonth(fechaFin.getMonth() + 1); // 1 mes gratis o según plan
+      }
 
       await client.query(
         `INSERT INTO suscripciones (aseguradora_id, plan_id, estado, fecha_inicio, fecha_fin, fecha_proximo_pago)
@@ -1800,7 +1825,7 @@ app.post("/api/auth/register", async (req, res) => {
       });
 
       // Log auditoría
-      await logAudit(userId, "REGISTRO_EXITOSO", "usuarios", { codigo_invitacion });
+      await logAudit(userId, "REGISTRO_EXITOSO", "usuarios", { codigo_invitacion, trial_days: trialDays || null });
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -3332,13 +3357,28 @@ app.post("/api/admin/invitaciones/crear", async (req, res) => {
     const admin = await requireAdminAccess(req);
     if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
 
-    const { plan_id, email, cantidad = 1, dias_expiracion = 30, pais, paises } = req.body;
+    const { plan_id, email, cantidad = 1, dias_expiracion = 30, pais, paises, dias_trial } = req.body;
 
     // Asegurar que la tabla tenga columnas pais/paises (compatibilidad DB vieja)
     await ensureInvitacionesPaisSchema();
 
     const paisNorm = normalizePais(pais);
     const paisesNorm = normalizePaisList(paises, paisNorm);
+
+    // Trial: si no viene dias_trial, default 2 para plan FREE.
+    let trialDays = 0;
+    const diasTrialRaw = Number(dias_trial ?? 0);
+    if (Number.isFinite(diasTrialRaw) && diasTrialRaw > 0) {
+      trialDays = Math.min(30, Math.floor(diasTrialRaw));
+    } else {
+      try {
+        const plan = await db.query("SELECT nombre FROM planes WHERE id = $1 LIMIT 1", [plan_id]);
+        const planName = String(plan.rows?.[0]?.nombre || "").trim().toUpperCase();
+        if (planName === "FREE") trialDays = 2;
+      } catch {
+        // ignore
+      }
+    }
 
     const invitaciones = [];
     for (let i = 0; i < cantidad; i++) {
@@ -3347,9 +3387,10 @@ app.post("/api/admin/invitaciones/crear", async (req, res) => {
       expiracion.setDate(expiracion.getDate() + dias_expiracion);
 
       const result = await db.query(
-        `INSERT INTO invitaciones (codigo, plan_id, email, expira_en, pais, paises, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id, codigo, email, expira_en, pais, paises`,
-        [codigo, plan_id, email || null, expiracion, paisNorm, paisesNorm]
+        `INSERT INTO invitaciones (codigo, plan_id, email, email_asignado, expira_en, pais, paises, trial_days, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+         RETURNING id, codigo, email, email_asignado, expira_en, pais, paises, trial_days`,
+        [codigo, plan_id, email || null, email || null, expiracion, paisNorm, paisesNorm, trialDays || null]
       );
 
       invitaciones.push(result.rows[0]);
@@ -3371,6 +3412,8 @@ app.get("/api/admin/invitaciones/listar", async (req, res) => {
   try {
     const admin = await requireAdminAccess(req);
     if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
+
+    await ensureInvitacionesPaisSchema();
 
     const result = await db.query(`
       SELECT i.*, p.nombre as plan_nombre 

@@ -57,11 +57,13 @@ CREATE TABLE IF NOT EXISTS invitaciones (
   codigo VARCHAR(50) UNIQUE NOT NULL,
   plan_id INT NOT NULL REFERENCES planes(id),
   email_asignado VARCHAR(255),
+  email VARCHAR(255),
   usado BOOLEAN DEFAULT false,
   fecha_uso TIMESTAMP,
   aseguradora_id UUID REFERENCES usuarios(id),
   creado_por UUID REFERENCES usuarios(id), -- Admin que creó la invitación
   expira_en TIMESTAMP NOT NULL,
+  trial_days INT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
