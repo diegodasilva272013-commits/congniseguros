@@ -226,6 +226,44 @@ const getAuthUserIdFromReq = (req) => {
   }
 };
 
+const getBlockedUserMessage = (reason) => {
+  const r = String(reason || "").trim().toUpperCase();
+  if (r === "TRIAL_EXPIRED") return "Tu prueba gratuita venció. Contactá a soporte para continuar.";
+  return "Usuario bloqueado. Contactá a soporte.";
+};
+
+const enforceUserNotBlockedOrExpiredTrial = async (userId) => {
+  if (!dbConnected) return { ok: true };
+  if (!userId) return { ok: false, status: 401, message: "No autorizado" };
+
+  // Admin nunca se bloquea por trial.
+  const r = await pool.query(
+    "SELECT id, rol, blocked_at, blocked_reason, trial_expires_at FROM usuarios WHERE id = $1 LIMIT 1",
+    [userId]
+  );
+  const u = r.rows?.[0];
+  if (!u) return { ok: false, status: 401, message: "Usuario no encontrado" };
+  if (String(u.rol || "").toLowerCase() === "admin") return { ok: true };
+
+  if (u.blocked_at) {
+    return { ok: false, status: 403, message: getBlockedUserMessage(u.blocked_reason) };
+  }
+
+  if (u.trial_expires_at) {
+    const exp = new Date(u.trial_expires_at);
+    if (exp instanceof Date && !isNaN(exp.getTime()) && exp.getTime() <= Date.now()) {
+      // Bloquear al vencer la prueba.
+      await pool.query(
+        "UPDATE usuarios SET blocked_at = NOW(), blocked_reason = 'TRIAL_EXPIRED' WHERE id = $1 AND blocked_at IS NULL",
+        [userId]
+      );
+      return { ok: false, status: 403, message: getBlockedUserMessage("TRIAL_EXPIRED") };
+    }
+  }
+
+  return { ok: true };
+};
+
 const byteaToBuffer = (v) => {
   if (!v) return null;
   if (Buffer.isBuffer(v)) return v;
@@ -811,6 +849,12 @@ pool.query("SELECT NOW()").then(() => {
   pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS profile_photo_mime TEXT").catch(() => {});
   pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS profile_photo_updated_at TIMESTAMP").catch(() => {});
 
+  // Trial / bloqueo (usuarios de prueba)
+  pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_started_at TIMESTAMPTZ").catch(() => {});
+  pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMPTZ").catch(() => {});
+  pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ").catch(() => {});
+  pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS blocked_reason TEXT").catch(() => {});
+
   // WhatsApp Cloud: mapear phone_number_id -> aseguradora (para webhooks entrantes)
   pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS wpp_phone_number_id TEXT").catch(() => {});
   pool.query(
@@ -1305,12 +1349,14 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     let user = null;
+    let fromDb = false;
 
     // Intentar BD primero
     if (dbConnected) {
       try {
         const result = await pool.query("SELECT * FROM usuarios WHERE LOWER(email) = LOWER($1)", [email]);
         user = result.rows[0];
+        fromDb = !!user;
       } catch (err) {
         console.log("Error DB, usando test users:", err.message);
       }
@@ -1328,6 +1374,14 @@ app.post("/api/auth/login", async (req, res) => {
     const match = await bcrypt.compare(password, user.password);
     if (!match) {
       return res.status(401).json({ status: "error", message: "Credenciales incorrectas" });
+    }
+
+    // Trial: si está vencido (o bloqueado), no permitir login.
+    if (dbConnected && fromDb) {
+      const access = await enforceUserNotBlockedOrExpiredTrial(user.id);
+      if (!access.ok) {
+        return res.status(access.status || 403).json({ status: "error", message: access.message });
+      }
     }
 
     // Generar JWT
@@ -1429,6 +1483,12 @@ app.post("/api/auth/verify-2fa", async (req, res) => {
     }
 
     const user = userResult.rows[0];
+
+    // Trial/bloqueo también aplica en verify-2fa (evita bypass).
+    const access = await enforceUserNotBlockedOrExpiredTrial(user.id);
+    if (!access.ok) {
+      return res.status(access.status || 403).json({ status: "error", message: access.message });
+    }
 
     // Obtener 2FA
     const tfaResult = await pool.query("SELECT * FROM dos_factores WHERE usuario_id = $1 AND habilitado = true", [
@@ -3334,10 +3394,112 @@ app.get("/api/admin/usuarios/listar", async (req, res) => {
     await ensureUsuariosPaisSchema();
 
     const result = await db.query(
-      "SELECT id, nombre, email, rol, pais, paises, created_at FROM usuarios ORDER BY id DESC"
+      "SELECT id, nombre, email, rol, pais, paises, trial_started_at, trial_expires_at, blocked_at, blocked_reason, created_at FROM usuarios ORDER BY created_at DESC"
     );
     res.json({ status: "success", data: result.rows });
   } catch (err) {
+    res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== ADMIN: CREAR USUARIO TRIAL (2 días por defecto) =====
+app.post("/api/admin/usuarios/crear-trial", async (req, res) => {
+  try {
+    const admin = await requireAdminAccess(req);
+    if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
+
+    const emailRaw = String(req.body?.email || "").trim().toLowerCase();
+    const passwordRaw = String(req.body?.password || "");
+    const nombre = String(req.body?.nombre || "").trim() || "Aseguradora";
+    const diasRaw = Number(req.body?.dias ?? 2);
+    const dias = Number.isFinite(diasRaw) && diasRaw > 0 ? Math.min(30, Math.floor(diasRaw)) : 2;
+
+    if (!emailRaw || !emailRaw.includes("@")) {
+      return res.status(400).json({ status: "error", message: "Email inválido" });
+    }
+    if (!passwordRaw || passwordRaw.length < 6) {
+      return res.status(400).json({ status: "error", message: "Password inválida (mínimo 6 caracteres)" });
+    }
+
+    const paisNorm = normalizePais(req.body?.pais);
+    const paisesNorm = normalizePaisList(req.body?.paises, paisNorm);
+
+    // Asegurar columnas necesarias (compat)
+    await ensureUsuariosPaisSchema();
+    await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_started_at TIMESTAMPTZ").catch(() => {});
+    await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMPTZ").catch(() => {});
+    await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ").catch(() => {});
+    await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS blocked_reason TEXT").catch(() => {});
+
+    const hashedPassword = await bcrypt.hash(passwordRaw, 12);
+    const trialStartedAt = new Date();
+    const trialExpiresAt = new Date(Date.now() + dias * 24 * 60 * 60 * 1000);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const userUpsert = await client.query(
+        `INSERT INTO usuarios (nombre, email, password, rol, pais, paises, trial_started_at, trial_expires_at, blocked_at, blocked_reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)
+         ON CONFLICT (email) DO UPDATE SET
+           nombre = EXCLUDED.nombre,
+           password = EXCLUDED.password,
+           rol = EXCLUDED.rol,
+           pais = EXCLUDED.pais,
+           paises = EXCLUDED.paises,
+           trial_started_at = EXCLUDED.trial_started_at,
+           trial_expires_at = EXCLUDED.trial_expires_at,
+           blocked_at = NULL,
+           blocked_reason = NULL
+         RETURNING id, nombre, email, rol, pais, paises, trial_started_at, trial_expires_at, blocked_at, blocked_reason`,
+        [nombre, emailRaw, hashedPassword, "aseguradora", paisNorm, paisesNorm, trialStartedAt, trialExpiresAt]
+      );
+
+      const user = userUpsert.rows[0];
+
+      // Suscripción FREE acotada a dias (solo informativa + reutilizable por checkMembership)
+      const plan = await client.query("SELECT id FROM planes WHERE UPPER(nombre) = 'FREE' LIMIT 1");
+      const planId = plan.rows?.[0]?.id || null;
+
+      if (planId) {
+        await client.query(
+          `INSERT INTO suscripciones (aseguradora_id, plan_id, estado, fecha_inicio, fecha_fin, fecha_proximo_pago)
+           VALUES ($1, $2, 'ACTIVA', $3, $4, $4)
+           ON CONFLICT (aseguradora_id) DO UPDATE SET
+             plan_id = EXCLUDED.plan_id,
+             estado = EXCLUDED.estado,
+             fecha_inicio = EXCLUDED.fecha_inicio,
+             fecha_fin = EXCLUDED.fecha_fin,
+             fecha_proximo_pago = EXCLUDED.fecha_proximo_pago`,
+          [user.id, planId, trialStartedAt, trialExpiresAt]
+        );
+      }
+
+      await client.query("COMMIT");
+
+      res.json({
+        status: "success",
+        data: {
+          user,
+          trial_days: dias,
+        },
+      });
+
+      await logAudit(admin.usuario_id, "ADMIN_CREATE_TRIAL_USER", "usuarios", {
+        email: emailRaw,
+        dias,
+      });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    if (err.code === "23505") {
+      return res.status(400).json({ status: "error", message: "Email ya registrado" });
+    }
     res.status(500).json({ status: "error", message: err.message });
   }
 });
@@ -3595,6 +3757,13 @@ app.post("/verify-code", async (req, res) => {
     }
 
     const userData = user.rows[0];
+
+    // Trial/bloqueo también aplica para auth por email.
+    const access = await enforceUserNotBlockedOrExpiredTrial(userData.id);
+    if (!access.ok) {
+      return res.status(access.status || 403).json({ status: "error", message: access.message });
+    }
+
     const token = jwt.sign(
       { id: userData.id, email: userData.email, rol: userData.rol },
       jwtSecret,

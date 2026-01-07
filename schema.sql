@@ -13,6 +13,10 @@ CREATE TABLE IF NOT EXISTS usuarios (
   profile_photo BYTEA,
   profile_photo_mime TEXT,
   profile_photo_updated_at TIMESTAMP,
+  trial_started_at TIMESTAMPTZ,
+  trial_expires_at TIMESTAMPTZ,
+  blocked_at TIMESTAMPTZ,
+  blocked_reason TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
