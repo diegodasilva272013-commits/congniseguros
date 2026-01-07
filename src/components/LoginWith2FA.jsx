@@ -3,6 +3,7 @@ import { Loader2, Mail, Smartphone } from "lucide-react";
 
 export default function LoginWith2FA({ onLoginSuccess }) {
   const [paso, setPaso] = useState(1); // 1: email/password, 2: 2FA
+  const [mode, setMode] = useState("login"); // login | invite
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [codigo2FA, setCodigo2FA] = useState("");
@@ -10,6 +11,11 @@ export default function LoginWith2FA({ onLoginSuccess }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [metodo2FA, setMetodo2FA] = useState(null); // 'email' o 'sms'
+
+  const [inviteCode, setInviteCode] = useState("");
+  const [inviteNombre, setInviteNombre] = useState("");
+  const [invitePais, setInvitePais] = useState("AR");
+  const [invitePassword, setInvitePassword] = useState("");
 
   const handleLoginStep1 = async (e) => {
     e.preventDefault();
@@ -38,6 +44,76 @@ export default function LoginWith2FA({ onLoginSuccess }) {
       } else {
         setError(data.message || "Error en login");
       }
+    } catch (err) {
+      setError("Error: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAcceptInvite = async (e) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+
+    try {
+      const codigo_invitacion = String(inviteCode || "").trim().toUpperCase();
+      const nombre = String(inviteNombre || "").trim();
+      const password = String(invitePassword || "");
+      const pais = String(invitePais || "AR").trim().toUpperCase() === "UY" ? "UY" : "AR";
+
+      if (!codigo_invitacion || codigo_invitacion.length < 6) {
+        setError("Código de invitación inválido");
+        return;
+      }
+      if (!password || password.length < 6) {
+        setError("La contraseña debe tener al menos 6 caracteres");
+        return;
+      }
+
+      const regRes = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codigo_invitacion, password, nombre, pais }),
+      });
+      const regData = await regRes.json();
+      if (regData.status !== "success") {
+        setError(regData.message || "No se pudo aceptar la invitación");
+        return;
+      }
+
+      const createdEmail = String(regData?.user?.email || "").trim();
+      if (!createdEmail) {
+        setError("Invitación aceptada, pero falta el email. Contactá soporte.");
+        return;
+      }
+
+      // Login automático luego de registrarse con invitación
+      const loginRes = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: createdEmail, password }),
+      });
+      const loginData = await loginRes.json();
+
+      if (loginData.status === "success") {
+        localStorage.setItem("token", loginData.token);
+        localStorage.setItem("user", JSON.stringify(loginData.user));
+        onLoginSuccess(loginData.user);
+        return;
+      }
+
+      if (loginData.status === "2fa_required") {
+        setEmail(createdEmail);
+        setPassword("");
+        setSessionToken(loginData.session_token);
+        setMetodo2FA(loginData.method);
+        setPaso(2);
+        setMode("login");
+        return;
+      }
+
+      setError(loginData.message || "Invitación aceptada, pero no se pudo iniciar sesión");
     } catch (err) {
       setError("Error: " + err.message);
     } finally {
@@ -80,7 +156,7 @@ export default function LoginWith2FA({ onLoginSuccess }) {
     <div className="max-w-md mx-auto bg-white rounded-lg shadow p-6">
       <h2 className="text-2xl font-bold mb-6">🔐 Login</h2>
 
-      {paso === 1 && (
+      {paso === 1 && mode === "login" && (
         <form onSubmit={handleLoginStep1} className="space-y-4">
           {error && <div className="p-3 bg-red-100 text-red-700 rounded">{error}</div>}
 
@@ -109,6 +185,80 @@ export default function LoginWith2FA({ onLoginSuccess }) {
           >
             {loading && <Loader2 size={16} className="animate-spin" />}
             Ingresar
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setError("");
+              setMode("invite");
+            }}
+            className="w-full text-blue-600 hover:underline"
+          >
+            Tengo un código de invitación
+          </button>
+        </form>
+      )}
+
+      {paso === 1 && mode === "invite" && (
+        <form onSubmit={handleAcceptInvite} className="space-y-4">
+          {error && <div className="p-3 bg-red-100 text-red-700 rounded">{error}</div>}
+
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded text-sm text-blue-900">
+            Ingresá el código de invitación para crear tu acceso (no hay registro libre).
+          </div>
+
+          <input
+            type="text"
+            value={inviteCode}
+            onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+            placeholder="Código de invitación"
+            className="w-full p-2 border border-gray-300 rounded font-mono"
+          />
+
+          <input
+            type="text"
+            value={inviteNombre}
+            onChange={(e) => setInviteNombre(e.target.value)}
+            placeholder="Nombre / Empresa"
+            className="w-full p-2 border border-gray-300 rounded"
+          />
+
+          <select
+            value={invitePais}
+            onChange={(e) => setInvitePais(e.target.value)}
+            className="w-full p-2 border border-gray-300 rounded"
+          >
+            <option value="AR">AR</option>
+            <option value="UY">UY</option>
+          </select>
+
+          <input
+            type="password"
+            value={invitePassword}
+            onChange={(e) => setInvitePassword(e.target.value)}
+            placeholder="Nueva contraseña"
+            className="w-full p-2 border border-gray-300 rounded"
+          />
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {loading && <Loader2 size={16} className="animate-spin" />}
+            Aceptar invitación
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setError("");
+              setMode("login");
+            }}
+            className="w-full text-blue-600 hover:underline"
+          >
+            Volver al login
           </button>
         </form>
       )}
