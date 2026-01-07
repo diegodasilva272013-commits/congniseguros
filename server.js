@@ -3776,6 +3776,160 @@ app.post("/api/admin/invitaciones/eliminar", async (req, res) => {
   }
 });
 
+// ===== AUTH: INVITACIÓN (CLAIM/ACTIVAR) + OTP =====
+// Flujo requerido (sin contraseñas): validar invitación, vincular a usuario ya creado, enviar OTP.
+app.post("/auth/invite/claim", async (req, res) => {
+  try {
+    const { invite_code, codigo_invitacion, email } = req.body || {};
+    const codigo = String(invite_code || codigo_invitacion || "").trim().toUpperCase();
+    const emailRaw = String(email || "").trim();
+
+    if (!codigo) return res.status(400).json({ status: "error", message: "Código de invitación requerido" });
+    if (!emailRaw) return res.status(400).json({ status: "error", message: "Email requerido" });
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const invResult = await client.query(
+        `SELECT * FROM invitaciones WHERE UPPER(codigo) = UPPER($1) LIMIT 1 FOR UPDATE`,
+        [codigo]
+      );
+      if (invResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ status: "error", message: "Código de invitación inválido" });
+      }
+
+      const invitacion = invResult.rows[0];
+
+      if (invitacion.usado) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ status: "error", message: "Invitación ya utilizada" });
+      }
+
+      if (invitacion.expira_en && new Date(invitacion.expira_en).getTime() <= Date.now()) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ status: "error", message: "Invitación expirada" });
+      }
+
+      const assignedEmail = String(invitacion.email_asignado || invitacion.email || "").trim();
+      if (!assignedEmail) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ status: "error", message: "Email no asignado en la invitación" });
+      }
+
+      if (normalizeEmailLower(assignedEmail) !== normalizeEmailLower(emailRaw)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ status: "error", message: "El email no corresponde a esta invitación" });
+      }
+
+      // No crear usuarios: el admin los pre-crea.
+      const userResult = await client.query(
+        "SELECT id, email FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1",
+        [emailRaw]
+      );
+      if (userResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ status: "error", message: "Cuenta no encontrada. Pedile al admin que te cree el usuario." });
+      }
+
+      const userId = userResult.rows[0].id;
+
+      await client.query(
+        "UPDATE invitaciones SET usado = true, fecha_uso = NOW(), aseguradora_id = $1 WHERE id = $2",
+        [userId, invitacion.id]
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Enviar OTP para login (mismo flujo que login normal)
+    const purpose = `aseg_login:${normalizeEmailLower(emailRaw)}`;
+    await createEmailCodeAndSend({ email: emailRaw, purpose });
+    return res.json({ status: "success", message: "Código enviado a tu email" });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/auth/otp/send", async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!email) return res.status(400).json({ status: "error", message: "Email requerido" });
+    const emailRaw = String(email || "").trim();
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    // No enumerar: responder success siempre.
+    const exists = await pool.query("SELECT 1 FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1", [emailRaw]);
+    if (exists.rows.length === 0) {
+      return res.json({ status: "success", message: "Si el email está registrado, te enviamos un código." });
+    }
+
+    const purpose = `aseg_login:${normalizeEmailLower(emailRaw)}`;
+    await createEmailCodeAndSend({ email: emailRaw, purpose });
+    return res.json({ status: "success", message: "Código enviado a tu email" });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/auth/otp/verify", async (req, res) => {
+  try {
+    const { email, otp } = req.body || {};
+    if (!email || !otp) {
+      return res.status(400).json({ status: "error", message: "Email y código requeridos" });
+    }
+
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    const emailRaw = String(email || "").trim();
+    const purpose = `aseg_login:${normalizeEmailLower(emailRaw)}`;
+    const v = await verifyEmailCodeByPurpose({ purpose, code: String(otp).trim() });
+    if (!v?.valid) {
+      return res.status(401).json({ status: "error", message: v?.message || "Código inválido" });
+    }
+
+    const user = await pool.query("SELECT * FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1", [emailRaw]);
+    if (user.rows.length === 0) {
+      return res.status(401).json({ status: "error", message: "Email no registrado" });
+    }
+
+    const userData = user.rows[0];
+    const access = await enforceUserNotBlockedOrExpiredTrial(userData.id);
+    if (!access.ok) {
+      return res.status(access.status || 403).json({ status: "error", message: access.message });
+    }
+
+    const token = jwt.sign({ id: userData.id, email: userData.email, rol: userData.rol }, jwtSecret, { expiresIn: "7d" });
+
+    return res.json({
+      status: "success",
+      user: {
+        id: userData.id,
+        email: userData.email,
+        nombre: userData.nombre,
+        rol: userData.rol,
+        pais: userData.pais || "AR",
+        paises: userData.paises || userData.pais || "AR",
+        trial_started_at: userData.trial_started_at || null,
+        trial_expires_at: userData.trial_expires_at || null,
+        blocked_at: userData.blocked_at || null,
+        blocked_reason: userData.blocked_reason || null,
+        profile_photo_dataurl: getProfilePhotoDataUrlFromUserRow(userData),
+      },
+      token,
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
 // ===== AUTH POR EMAIL =====
 app.post("/send-code", async (req, res) => {
   try {

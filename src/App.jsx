@@ -580,12 +580,10 @@ export default function App() {
   const [codeDigits, setCodeDigits] = useState(["", "", "", "", "", ""]);
   const authFormRef = useRef(null);
 
-  // Auth por invitación (solo para crear acceso con código; luego entra por email+código)
+  // Auth por invitación (claim): NO registra ni pide contraseña. Luego entra por OTP.
   const [asegAuthMode, setAsegAuthMode] = useState("email"); // email | invite
   const [inviteCode, setInviteCode] = useState("");
-  const [inviteNombre, setInviteNombre] = useState("");
-  const [invitePais, setInvitePais] = useState("AR");
-  const [invitePassword, setInvitePassword] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
 
   const getTrialDaysLeft = (trialExpiresAt) => {
     if (!trialExpiresAt) return null;
@@ -3137,7 +3135,7 @@ export default function App() {
             {asegAuthMode === "invite" ? (
               <>
                 <div className="p-3 bg-blue-50 border border-blue-200 rounded text-sm text-blue-900">
-                  Ingresá tu <b>código de invitación</b> para crear el acceso. Luego ingresás por email con código.
+                  Ingresá tu <b>código de invitación</b> y tu <b>email</b>. Te enviamos un código (OTP) para entrar.
                 </div>
 
                 <div className="space-y-2">
@@ -3152,93 +3150,46 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-700">Nombre / Empresa</label>
+                  <label className="text-xs font-black text-slate-700">Email</label>
                   <input
-                    type="text"
-                    value={inviteNombre}
-                    onChange={(e) => setInviteNombre(e.target.value)}
+                    type="email"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
                     className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
-                    placeholder="Tu nombre o empresa"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-700">País</label>
-                  <select
-                    value={invitePais}
-                    onChange={(e) => setInvitePais(e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
-                  >
-                    <option value="AR">🇦🇷 Argentina</option>
-                    <option value="UY">🇺🇾 Uruguay</option>
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-700">Nueva contraseña</label>
-                  <input
-                    type="password"
-                    value={invitePassword}
-                    onChange={(e) => setInvitePassword(e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
-                    placeholder="Mínimo 6 caracteres"
+                    placeholder="tu@email.com"
                   />
                 </div>
 
                 <button
                   type="button"
                   onClick={async () => {
-                    const codigo_invitacion = String(inviteCode || "").trim().toUpperCase();
-                    const nombre = String(inviteNombre || "").trim();
-                    const password = String(invitePassword || "");
-                    const pais = String(invitePais || "AR").trim().toUpperCase() === "UY" ? "UY" : "AR";
+                    const invite_code = String(inviteCode || "").trim().toUpperCase();
+                    const email = String(inviteEmail || "").trim();
 
-                    if (!codigo_invitacion || codigo_invitacion.length < 6) {
+                    if (!invite_code || invite_code.length < 6) {
                       return showMessage("Código de invitación inválido", "error");
                     }
-                    if (!password || password.length < 6) {
-                      return showMessage("La contraseña debe tener al menos 6 caracteres", "error");
-                    }
+                    if (!email || !email.includes("@")) return showMessage("Ingresá un email válido", "error");
 
                     setLoading(true);
                     try {
-                      const regRes = await fetch("/api/auth/register", {
+                      const claimRes = await fetch("/auth/invite/claim", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ codigo_invitacion, password, nombre, pais }),
+                        body: JSON.stringify({ invite_code, email }),
                       });
-                      const regData = await regRes.json().catch(() => null);
 
-                      if (!regData || regData.status !== "success") {
-                        const msg = regData?.message || "No se pudo aceptar la invitación";
-                        if (String(msg).toLowerCase().includes("ya") && String(msg).toLowerCase().includes("registr")) {
-                          showMessage("Ese email ya está registrado. Ingresá con tu email y pedí el código.", "error");
-                        } else {
-                          showMessage(msg, "error");
-                        }
-                        return;
-                      }
-
-                      const createdEmail = String(regData?.user?.email || "").trim();
-                      if (!createdEmail) {
-                        showMessage("Invitación aceptada, pero falta el email. Contactá soporte.", "error");
-                        return;
-                      }
-
-                      // Después de aceptar invitación, se entra por email + código.
-                      // Disparamos el envío y pasamos directo al paso de código.
-                      const res = await fetch("/send-code", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ email: createdEmail }),
-                      });
-                      const raw = await res.text();
+                      const raw = await claimRes.text();
                       const data = raw ? JSON.parse(raw) : { status: "error", message: "Respuesta vacía del servidor" };
+                      if (data.status !== "success") {
+                        showMessage(data.message || "No se pudo validar la invitación", "error");
+                        return;
+                      }
 
-                      setEmailStep(createdEmail);
+                      setEmailStep(email);
                       setCodeDigits(["", "", "", "", "", ""]);
                       setAsegAuthMode("email");
-                      showMessage(data?.message || "Te enviamos un código a tu email.", data?.status === "success" ? "success" : "info");
+                      showMessage(data?.message || "Te enviamos un código a tu email.", "success");
                     } catch (e) {
                       showMessage(e.message, "error");
                     } finally {
