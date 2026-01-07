@@ -522,6 +522,44 @@ const ensureUsuariosPaisSchema = async () => {
   }
 };
 
+const ensureAuditoriaSchema = async () => {
+  try {
+    // Tabla canonical (sin tilde) para evitar problemas de encoding/quoted identifiers.
+    // Nota: alineada a schema_seguridad.sql y con compat a columnas antiguas.
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS auditoria (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        usuario_id UUID,
+        accion VARCHAR(255) NOT NULL,
+        recurso VARCHAR(100),
+        recurso_id VARCHAR(255),
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        detalles JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    // Compat: algunas instalaciones viejas usaban columna "timestamp".
+    await pool
+      .query(`ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS timestamp TIMESTAMPTZ DEFAULT NOW();`)
+      .catch(() => {});
+    await pool
+      .query(`ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`)
+      .catch(() => {});
+
+    // Compat: si existiera una tabla con tilde, no tocamos datos; pero evitamos que el código falle.
+    // Si alguien consulta "auditoría" en SQL manual, creamos una VIEW apuntando a auditoria.
+    await pool
+      .query('CREATE OR REPLACE VIEW "auditoría" AS SELECT * FROM auditoria')
+      .catch(() => {});
+  } catch {
+    // ignore
+  }
+};
+
 const ensureInvitacionesPaisSchema = async () => {
   try {
     // Invitaciones puede existir en DBs viejas sin estos campos.
@@ -837,6 +875,9 @@ pool.query("SELECT NOW()").then(() => {
   // Códigos por email persistentes (evita fallos por memoria/instancias)
   ensureEmailCodesTable().catch(() => {});
 
+  // Auditoría (evita crash si falta la tabla)
+  ensureAuditoriaSchema().catch(() => {});
+
   // Asegurar columnas mínimas en master DB (migración liviana)
   pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS pais VARCHAR(2) DEFAULT 'AR'").catch(() => {});
   pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS paises TEXT").catch(() => {});
@@ -989,11 +1030,12 @@ const checkFeature = (feature) => async (req, res, next) => {
   next();
 };
 
-// ======== MIDDLEWARE: AUDITORÍA =====
+// ======== MIDDLEWARE: AUDITORIA =====
 const logAudit = async (userId, accion, recurso, detalles = {}) => {
   try {
+    await ensureAuditoriaSchema();
     await pool.query(
-      `INSERT INTO auditoría (usuario_id, accion, recurso, detalles) 
+      `INSERT INTO auditoria (usuario_id, accion, recurso, detalles)
        VALUES ($1, $2, $3, $4)`,
       [userId, accion, recurso, JSON.stringify(detalles)]
     );
@@ -3695,9 +3737,11 @@ app.get("/api/admin/auditoria/listar", async (req, res) => {
     const admin = await requireAdminAccess(req);
     if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
 
+    await ensureAuditoriaSchema();
+
     const result = await db.query(`
       SELECT * FROM auditoria
-      ORDER BY timestamp DESC
+      ORDER BY COALESCE(created_at, timestamp) DESC
       LIMIT 500
     `);
 

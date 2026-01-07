@@ -67,8 +67,8 @@ CREATE TABLE IF NOT EXISTS invitaciones (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- ===== AUDITORÍA =====
-CREATE TABLE IF NOT EXISTS auditoría (
+-- ===== AUDITORIA =====
+CREATE TABLE IF NOT EXISTS auditoria (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   usuario_id UUID REFERENCES usuarios(id),
   accion VARCHAR(255) NOT NULL,
@@ -100,7 +100,7 @@ CREATE INDEX idx_pagos_aseguradora ON pagos(aseguradora_id);
 CREATE INDEX idx_pagos_estado ON pagos(estado);
 CREATE INDEX idx_invitaciones_codigo ON invitaciones(codigo);
 CREATE INDEX idx_invitaciones_usado ON invitaciones(usado);
-CREATE INDEX idx_auditoria_usuario ON auditoría(usuario_id);
+CREATE INDEX idx_auditoria_usuario ON auditoria(usuario_id);
 CREATE INDEX idx_api_tokens_aseguradora ON api_tokens(aseguradora_id);
 
 -- ===== DATOS INICIALES: PLANES =====
