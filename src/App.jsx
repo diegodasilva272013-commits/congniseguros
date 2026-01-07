@@ -11,6 +11,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import AdminDashboard from "./components/AdminDashboard.jsx";
 import DeveloperAdmin from "./components/DeveloperAdmin.jsx";
+import LoginWith2FA from "./components/LoginWith2FA.jsx";
 import * as XLSX from "xlsx";
 import {
   Shield,
@@ -3114,155 +3115,15 @@ export default function App() {
             <p className="text-slate-500 text-sm mt-1">Panel Aseguradora</p>
           </div>
 
-          <div className="flex p-1 bg-slate-100 rounded-xl mb-8">
-            <button
-              type="button"
-              onClick={() => setAuthView("login")}
-              className="flex-1 py-3 text-sm font-black rounded-lg bg-white text-blue-600 shadow-sm"
-            >
-              Iniciar sesión
-            </button>
-          </div>
-
-          <form ref={authFormRef} className="space-y-5">
-            {/* STEP 1: EMAIL */}
-            {!emailStep && (
-              <>
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-700">Email</label>
-                  <input
-                    id="emailInput"
-                    type="email"
-                    required
-                    className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
-                    placeholder="tu@email.com"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-700">País</label>
-                  <select
-                    value={authPais}
-                    onChange={(e) => setAuthPais(e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
-                  >
-                    <option value="AR">🇦🇷 Argentina</option>
-                    <option value="UY">🇺🇾 Uruguay</option>
-                  </select>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const email = document.getElementById("emailInput").value;
-                    if (!email) return showMessage("Ingresá tu email", "error");
-                    setLoading(true);
-                    try {
-                      const res = await fetch("/send-code", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ email }),
-                      });
-                      const raw = await res.text();
-                      const data = raw ? JSON.parse(raw) : { status: "error", message: "Respuesta vacía del servidor" };
-                      if (data.status === "success") {
-                        setEmailStep(email);
-                        showMessage("Código enviado a tu email", "success");
-                      } else {
-                        showMessage(data.message, "error");
-                      }
-                    } catch (e) {
-                      showMessage(e.message, "error");
-                    } finally {
-                      setLoading(false);
-                    }
-                  }}
-                  disabled={loading}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-2xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-60"
-                >
-                  {loading ? <Loader2 className="animate-spin" /> : <Send size={18} />}
-                  Enviar código
-                </button>
-              </>
-            )}
-
-            {/* STEP 2: CÓDIGO */}
-            {emailStep && (
-              <>
-                <div className="text-center mb-4">
-                  <p className="text-sm font-black text-slate-700">Ingresa el código de {emailStep}</p>
-                </div>
-
-                <div className="flex gap-2 justify-center mb-4">
-                  {codeDigits.map((digit, idx) => (
-                    <input
-                      key={idx}
-                      type="text"
-                      maxLength="1"
-                      value={digit}
-                      onChange={(e) => {
-                        const newDigits = [...codeDigits];
-                        newDigits[idx] = e.target.value.slice(0, 1);
-                        setCodeDigits(newDigits);
-                        if (e.target.value && idx < 5) {
-                          document.getElementById(`digit-${idx + 1}`).focus();
-                        }
-
-                        // Auto-verificar al completar el 6º dígito (sin quitar el botón)
-                        if (idx === 5 && e.target.value) {
-                          const code = newDigits.join("");
-                          if (code.length === 6 && emailStep) {
-                            const key = `${emailStep}:${code}`;
-                            if (lastAutoVerifyRef.current !== key) {
-                              lastAutoVerifyRef.current = key;
-                              verifyAseguradoraEmailCode({ email: emailStep, code });
-                            }
-                          }
-                        }
-                      }}
-                      id={`digit-${idx}`}
-                      className="w-12 h-12 px-0 py-0 bg-white border-2 border-slate-300 rounded-xl outline-none text-center text-lg font-black text-slate-900"
-                    />
-                  ))}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const code = codeDigits.join("");
-                    if (code.length !== 6) return showMessage("Completa los 6 dígitos", "error");
-                    verifyAseguradoraEmailCode({ email: emailStep, code });
-                  }}
-                  disabled={loading || codeDigits.join("").length !== 6}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-2xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-60"
-                >
-                  {loading ? <Loader2 className="animate-spin" /> : <Send size={18} />}
-                  Verificar
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmailStep(null);
-                    setCodeDigits(["", "", "", "", "", ""]);
-                  }}
-                  className="w-full bg-slate-200 hover:bg-slate-300 text-slate-700 font-black py-2 rounded-2xl text-sm"
-                >
-                  Volver
-                </button>
-              </>
-            )}
-
-            {!emailStep && (
-              <button
-                type="button"
-                onClick={openSupport}
-                className="w-full bg-slate-900 hover:bg-black text-white font-black py-3 rounded-2xl shadow flex items-center justify-center gap-2"
-              >
-                <MessageCircle size={18} /> Contactar soporte
-              </button>
-            )}
-          </form>
+          <LoginWith2FA
+            onLoginSuccess={(u) => {
+              setUser(u);
+              setMode("dashboard");
+              setMenu("cartera");
+              loadClients(u.id);
+              showMessage(`Bienvenido ${u.nombre || u.email}`, "success");
+            }}
+          />
         </div>
       </div>
     );
@@ -3324,6 +3185,16 @@ export default function App() {
               <div className="text-center">
                 <div className="font-black leading-none">COGNISEGUROS</div>
                 <div className="text-xs text-[var(--muted)]">Panel Aseguradora</div>
+                {(() => {
+                  const daysLeft = getTrialDaysLeft(user?.trial_expires_at);
+                  if (daysLeft == null) return null;
+                  if (daysLeft <= 0) return null;
+                  return (
+                    <div className="mt-1 inline-flex items-center gap-2 px-2 py-0.5 rounded-lg border border-[rgba(63,209,255,.45)] bg-[rgba(255,255,255,.04)] text-[11px] font-black">
+                      Versión de prueba · {daysLeft} día{daysLeft === 1 ? "" : "s"} restantes
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
