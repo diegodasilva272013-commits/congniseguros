@@ -149,6 +149,7 @@ const tryCaptionsSubmit = async ({ apiKey, payload }) => {
   const configured = resolveCaptionsSubmitUrl();
   const candidates = configured ? [configured] : buildCaptionsCandidates({ submitOrPoll: "submit" });
   let last = null;
+  const attempted = [];
 
   for (const url of candidates) {
     try {
@@ -161,14 +162,16 @@ const tryCaptionsSubmit = async ({ apiKey, payload }) => {
       const rawText = await resp.text();
       const data = parseMaybeJson(rawText);
       last = { url, resp, rawText, data };
+      attempted.push({ url, status: resp.status, ok: resp.ok });
 
       // 404: probamos siguiente candidato
       if (resp.status === 404) continue;
 
       // si no es 404, devolvemos el resultado (ok o error real)
-      return { url, ok: resp.ok, status: resp.status, rawText, data };
+      return { url, ok: resp.ok, status: resp.status, rawText, data, attempted };
     } catch (e) {
       last = { url, error: e };
+      attempted.push({ url, status: 0, ok: false, error: String(e?.message || e) });
       // seguimos probando otros candidatos
       continue;
     }
@@ -176,9 +179,23 @@ const tryCaptionsSubmit = async ({ apiKey, payload }) => {
 
   // si todos fueron 404 o fallaron red
   if (last?.resp) {
-    return { url: last.url, ok: last.resp.ok, status: last.resp.status, rawText: last.rawText || "", data: last.data || {} };
+    return {
+      url: last.url,
+      ok: last.resp.ok,
+      status: last.resp.status,
+      rawText: last.rawText || "",
+      data: last.data || {},
+      attempted,
+    };
   }
-  return { url: (candidates[0] || ""), ok: false, status: 0, rawText: "", data: { message: last?.error?.message || "No se pudo conectar" } };
+  return {
+    url: candidates[0] || "",
+    ok: false,
+    status: 0,
+    rawText: "",
+    data: { message: last?.error?.message || "No se pudo conectar" },
+    attempted,
+  };
 };
 
 const captionsAuthHeaders = (apiKey) => {
@@ -3821,6 +3838,7 @@ app.post("/api/enterprise/captions/create-video", requireEnterpriseAuth, async (
         message: `Captions: ${String(msg || "error").trim()}`,
         details: {
           endpoint: usedEndpoint,
+          attemptedEndpoints: Array.isArray(submitResult?.attempted) ? submitResult.attempted : undefined,
           httpStatus: submitResult?.status || null,
           response: typeof data === "object" ? data : { raw: truncateForLog(data) },
           responseRaw: truncateForLog(submitResult?.rawText || ""),
