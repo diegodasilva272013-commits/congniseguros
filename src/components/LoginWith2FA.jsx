@@ -33,8 +33,8 @@ export default function LoginWith2FA({ onLoginSuccess }) {
 
       if (data.status === "success") {
         // Sin 2FA, login directo
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("user", JSON.stringify(data.user));
+        sessionStorage.setItem("token", data.token);
+        sessionStorage.setItem("user", JSON.stringify(data.user));
         onLoginSuccess(data.user);
       } else if (data.status === "2fa_required") {
         // 2FA activado
@@ -97,8 +97,8 @@ export default function LoginWith2FA({ onLoginSuccess }) {
       const loginData = await loginRes.json();
 
       if (loginData.status === "success") {
-        localStorage.setItem("token", loginData.token);
-        localStorage.setItem("user", JSON.stringify(loginData.user));
+        sessionStorage.setItem("token", loginData.token);
+        sessionStorage.setItem("user", JSON.stringify(loginData.user));
         onLoginSuccess(loginData.user);
         return;
       }
@@ -139,8 +139,8 @@ export default function LoginWith2FA({ onLoginSuccess }) {
       const data = await res.json();
 
       if (data.status === "success") {
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("user", JSON.stringify(data.user));
+        sessionStorage.setItem("token", data.token);
+        sessionStorage.setItem("user", JSON.stringify(data.user));
         onLoginSuccess(data.user);
       } else {
         setError(data.message || "Código inválido");

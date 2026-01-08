@@ -10,6 +10,7 @@ export default function DeveloperAdmin({ onExit }) {
 
   const logout = () => {
     try {
+      sessionStorage.removeItem("token");
       localStorage.removeItem("token");
     } catch {
       // ignore
@@ -34,7 +35,7 @@ export default function DeveloperAdmin({ onExit }) {
       }
       if (data.token) {
         try {
-          localStorage.setItem("token", String(data.token));
+          sessionStorage.setItem("token", String(data.token));
         } catch {
           // ignore
         }

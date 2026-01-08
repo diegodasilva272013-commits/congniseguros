@@ -555,6 +555,19 @@ export default function App() {
   // ✅ NUEVO: “hydration” para restaurar estado antes de persistir
   const hydratedRef = useRef(false);
 
+  // Seguridad: no persistimos sesión entre cierres del navegador.
+  // Limpiamos tokens viejos que hayan quedado en localStorage.
+  useEffect(() => {
+    try {
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      localStorage.removeItem("enterprise_token");
+      localStorage.removeItem("enterprise_user");
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const showMessage = (msg, type = "info") => {
     const text = typeof msg === "string" ? msg : JSON.stringify(msg);
     setStatusMsg({ message: text, type });
@@ -735,7 +748,10 @@ export default function App() {
 
     // JWT para endpoints admin
     try {
+      sessionStorage.removeItem("token");
+      sessionStorage.removeItem("user");
       localStorage.removeItem("token");
+      localStorage.removeItem("user");
     } catch {
       // ignore
     }
@@ -752,6 +768,8 @@ export default function App() {
     setRsScript("");
     setRsLoading(false);
     try {
+      sessionStorage.removeItem("enterprise_token");
+      sessionStorage.removeItem("enterprise_user");
       localStorage.removeItem("enterprise_token");
       localStorage.removeItem("enterprise_user");
     } catch {
@@ -811,8 +829,8 @@ export default function App() {
       setEnterpriseUser(u);
       setEnterpriseMode("app");
       try {
-        localStorage.setItem("enterprise_token", t);
-        localStorage.setItem("enterprise_user", JSON.stringify(u || {}));
+        sessionStorage.setItem("enterprise_token", t);
+        sessionStorage.setItem("enterprise_user", JSON.stringify(u || {}));
       } catch {
         // ignore
       }
@@ -924,7 +942,7 @@ export default function App() {
 
     let token = "";
     try {
-      token = String(localStorage.getItem("token") || "");
+      token = String(sessionStorage.getItem("token") || "");
     } catch {
       token = "";
     }
@@ -2203,7 +2221,7 @@ export default function App() {
         // Guardar JWT (lo usa el AdminDashboard)
         if (data.token) {
           try {
-            localStorage.setItem("token", String(data.token));
+            sessionStorage.setItem("token", String(data.token));
           } catch {
             // ignore
           }
@@ -2751,23 +2769,7 @@ export default function App() {
 
             <button
               onClick={() => {
-                // intento de reusar sesión si existe
-                try {
-                  const t = String(localStorage.getItem("enterprise_token") || "").trim();
-                  const uRaw = String(localStorage.getItem("enterprise_user") || "");
-                  const u = uRaw ? JSON.parse(uRaw) : null;
-                  if (t && u) {
-                    setEnterpriseToken(t);
-                    setEnterpriseUser(u);
-                    setEnterpriseMode("app");
-                  } else {
-                    setEnterpriseMode("auth");
-                  }
-                } catch {
-                  setEnterpriseMode("auth");
-                }
-                setEnterpriseEmailStep(null);
-                setEnterpriseCodeDigits(["", "", "", "", "", ""]);
+                resetEnterpriseSession();
                 setRootView("enterprise");
               }}
               className="p-8 rounded-3xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-left shadow-sm"
