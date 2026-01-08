@@ -3825,12 +3825,29 @@ app.post("/api/enterprise/captions/create-video", requireEnterpriseAuth, async (
 
     const script = String(req.body?.script || "").trim();
     const avatar = String(req.body?.avatar || "auto").trim();
+    const creatorNameRaw = String(req.body?.creatorName || "").trim();
+    const resolutionRaw = String(req.body?.resolution || "").trim();
 
     if (!script) return res.status(400).json({ status: "error", message: "script requerido" });
     if (script.length > 8000) return res.status(400).json({ status: "error", message: "script demasiado largo" });
 
-    // Payload mínimo: tus docs muestran /submit y /poll, así que usamos /submit.
-    const payload = { script, avatar, language: "es" };
+    // Payload según doc de Captions Creator API: /api/creator/submit
+    // Si querés más avatares/nombres, pasame la lista de creatorName válidos.
+    const creatorNameByAvatar = {
+      auto: "Kate",
+      vida: "Kate",
+      hogar: "Kate",
+      comercio: "Kate",
+    };
+    const creatorName = creatorNameRaw || creatorNameByAvatar[String(avatar || "auto").toLowerCase()] || "Kate";
+    const resolution = (resolutionRaw || "fhd").toLowerCase();
+    const allowedResolutions = new Set(["fhd", "hd", "sd"]);
+
+    const payload = {
+      script,
+      creatorName,
+      resolution: allowedResolutions.has(resolution) ? resolution : "fhd",
+    };
 
     const submitResult = await tryCaptionsSubmit({ apiKey, payload });
     const data = submitResult?.data || {};
