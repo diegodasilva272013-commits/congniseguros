@@ -241,30 +241,16 @@ const captionsPollFromApi = async ({ apiKey, operationId }) => {
   if (!op) return null;
 
   for (const pollUrl of candidates) {
-    // 1) GET /poll?operationId=...
+    // Según docs: POST /creator/poll {operationId}
     let resp;
     try {
-      const u = new URL(pollUrl);
-      u.searchParams.set("operationId", op);
-      resp = await fetch(u.toString(), {
-        method: "GET",
-        headers: captionsAuthHeaders(apiKey),
+      resp = await fetch(pollUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...captionsAuthHeaders(apiKey) },
+        body: JSON.stringify({ operationId: op }),
       });
     } catch {
       resp = null;
-    }
-
-    // 2) fallback POST /poll {operationId}
-    if (!resp || resp.status === 404) {
-      try {
-        resp = await fetch(pollUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...captionsAuthHeaders(apiKey) },
-          body: JSON.stringify({ operationId: op }),
-        });
-      } catch {
-        resp = null;
-      }
     }
 
     if (!resp) continue;
@@ -276,18 +262,17 @@ const captionsPollFromApi = async ({ apiKey, operationId }) => {
 
     const url = String(data?.url || data?.videoUrl || data?.video_url || "").trim();
     const creditsSpent = data?.creditsSpent ?? data?.credits_spent ?? null;
-    const statusRaw = String(data?.status || data?.state || data?.event || "").trim().toUpperCase();
+    const state = String(data?.state || "").trim().toUpperCase();
 
     let status = "PENDING";
     if (url) status = "SUCCESS";
-    if (/SUCCESS/.test(statusRaw)) status = "SUCCESS";
-    if (/FAIL|ERROR/.test(statusRaw)) status = "FAILURE";
+    if (/FAIL|ERROR/.test(state)) status = "FAILURE";
 
     return {
       status,
       url: url || null,
       creditsSpent,
-      lastEvent: data?.event ? String(data.event) : "creator.poll",
+      lastEvent: state ? `creator.poll.${state}` : "creator.poll",
       payload: data,
     };
   }
@@ -3958,16 +3943,8 @@ app.get("/api/enterprise/captions/probe", requireEnterpriseAuth, async (req, res
 
     const pollProbes = [];
     for (const u of pollCandidates.slice(0, 8)) {
-      // probamos GET sin operationId válido, solo para ver si existe vs 404
-      let uu = u;
-      try {
-        const x = new URL(u);
-        x.searchParams.set("operationId", "test");
-        uu = x.toString();
-      } catch {
-        // ignore
-      }
-      pollProbes.push(await probeOne(uu, "GET"));
+      // según docs: POST /creator/poll con operationId
+      pollProbes.push(await probeOne(u, "POST", { operationId: "test" }));
     }
 
     return res.json({
