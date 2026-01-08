@@ -54,7 +54,10 @@ WHATSAPP_PHONE_NUMBER_ID=tu_phone_id_aqui
 WHATSAPP_ACCESS_TOKEN=tu_token_aqui
 
 # OpenAI
-OPENAI_API_KEY=tu_openai_key_aqui
+API_KEY_OPEN=tu_openai_key_aqui
+
+# Compatibilidad (opcional):
+# OPENAI_API_KEY=tu_openai_key_aqui
 
 # Server
 PORT=5000
@@ -157,7 +160,7 @@ psql -U postgres -c "CREATE DATABASE cogniseguros;"
 - Agregá `WHATSAPP_PHONE_NUMBER_ID` y `WHATSAPP_ACCESS_TOKEN` al `.env`
 
 **Error: "OpenAI error"**
-- Verificá que `OPENAI_API_KEY` sea válida en `.env`
+- Verificá que `API_KEY_OPEN` sea válida en `.env` (o `OPENAI_API_KEY` por compatibilidad)
 
 ## 🎉 ¡Listo!
 

@@ -72,7 +72,10 @@ ADMIN_KEY=tu_admin_key_super_secreto
 
 WHATSAPP_PHONE_NUMBER_ID=tu_phone_id_aqui
 WHATSAPP_ACCESS_TOKEN=tu_token_aqui
-OPENAI_API_KEY=tu_openai_key_aqui
+API_KEY_OPEN=tu_openai_key_aqui
+
+# Compatibilidad (opcional):
+# OPENAI_API_KEY=tu_openai_key_aqui
 ```
 
 ---

@@ -215,7 +215,10 @@ WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_ACCESS_TOKEN=
 
 # OpenAI
-OPENAI_API_KEY=
+API_KEY_OPEN=
+
+# Compatibilidad (opcional):
+# OPENAI_API_KEY=
 
 # Admin
 ADMIN_KEY=clave_admin_secreta

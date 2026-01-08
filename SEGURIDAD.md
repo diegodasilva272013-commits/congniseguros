@@ -220,7 +220,10 @@ Para producción, cambiar:
 # .env
 ADMIN_KEY=algo_muy_secreto_y_largo_xyz123
 DB_PASSWORD=contraseña_segura_basedatos
-OPENAI_API_KEY=sk-xxxxx
+API_KEY_OPEN=sk-xxxxx
+
+# Compatibilidad (opcional):
+# OPENAI_API_KEY=sk-xxxxx
 WHATSAPP_ACCESS_TOKEN=xxxxx
 
 # En código:

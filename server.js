@@ -2631,6 +2631,12 @@ app.post("/api/config/get", async (req, res) => {
 });
 
 const resolveOpenAiApiKeyForReq = async (req) => {
+  const looksLikePlaceholderOpenAiKey = (raw) => {
+    const k = String(raw || "").trim();
+    if (!k) return true;
+    return /tu[_-]?openai/i.test(k) || /_aqui$/i.test(k) || /^YOUR_/i.test(k);
+  };
+
   // 1) Preferir key guardada por aseguradora (tenant)
   try {
     const tenantPool = await getTenantPoolFromReq(req);
@@ -2647,12 +2653,12 @@ const resolveOpenAiApiKeyForReq = async (req) => {
 
     // 1a) Scope solicitado (o ASEGURADORA por defecto)
     const v1 = await tryRead(preferredScope);
-    if (v1) return v1;
+    if (v1 && !looksLikePlaceholderOpenAiKey(v1)) return v1;
 
     // 1b) Fallback a ASEGURADORA si pidieron otro scope
     if (preferredScope !== "ASEGURADORA") {
       const v2 = await tryRead("ASEGURADORA");
-      if (v2) return v2;
+      if (v2 && !looksLikePlaceholderOpenAiKey(v2)) return v2;
     }
 
     // 1c) Fallback a GLOBAL (compatibilidad)
@@ -2661,13 +2667,14 @@ const resolveOpenAiApiKeyForReq = async (req) => {
       ["openai_api_key"]
     );
     const vg = String(rGlobal.rows[0]?.value || "").trim();
-    if (vg) return vg;
+    if (vg && !looksLikePlaceholderOpenAiKey(vg)) return vg;
   } catch {
     // ignore
   }
 
   // 2) Fallback a env
-  return String(process.env.API_KEY_OPEN || process.env.OPENAI_API_KEY || "").trim();
+  const envKey = String(process.env.API_KEY_OPEN || process.env.OPENAI_API_KEY || "").trim();
+  return looksLikePlaceholderOpenAiKey(envKey) ? "" : envKey;
 };
 
 // ===== WHATSAPP INBOX: SSE (realtime) =====

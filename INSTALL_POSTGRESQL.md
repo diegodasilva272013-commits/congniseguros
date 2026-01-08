@@ -31,7 +31,10 @@ JWT_SECRET=tu_secreto_super_seguro_cambiar_en_produccion
 
 WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_ACCESS_TOKEN=
-OPENAI_API_KEY=
+API_KEY_OPEN=
+
+# Compatibilidad (opcional):
+# OPENAI_API_KEY=
 SENDGRID_API_KEY=
 TWILIO_ACCOUNT_SID=
 TWILIO_AUTH_TOKEN=
