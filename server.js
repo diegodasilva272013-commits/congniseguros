@@ -2667,7 +2667,7 @@ const resolveOpenAiApiKeyForReq = async (req) => {
   }
 
   // 2) Fallback a env
-  return String(process.env.OPENAI_API_KEY || "").trim();
+  return String(process.env.API_KEY_OPEN || process.env.OPENAI_API_KEY || "").trim();
 };
 
 // ===== WHATSAPP INBOX: SSE (realtime) =====
@@ -3373,8 +3373,8 @@ app.post("/api/marketing/copy", async (req, res) => {
           toSafeApiErrorBody(
             makeConfigError(
               "openai",
-              ["OPENAI_API_KEY"],
-              "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá OPENAI_API_KEY en EasyPanel y reiniciá el backend."
+              ["API_KEY_OPEN", "OPENAI_API_KEY"],
+              "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá API_KEY_OPEN (o OPENAI_API_KEY) en EasyPanel y reiniciá el backend."
             )
           )
         );
@@ -3437,8 +3437,8 @@ app.post("/api/marketing/image", async (req, res) => {
           toSafeApiErrorBody(
             makeConfigError(
               "openai",
-              ["OPENAI_API_KEY"],
-              "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá OPENAI_API_KEY en EasyPanel y reiniciá el backend."
+              ["API_KEY_OPEN", "OPENAI_API_KEY"],
+              "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá API_KEY_OPEN (o OPENAI_API_KEY) en EasyPanel y reiniciá el backend."
             )
           )
         );
@@ -3506,8 +3506,8 @@ app.post("/api/marketing/social-script", requireEnterpriseAuth, async (req, res)
           toSafeApiErrorBody(
             makeConfigError(
               "openai",
-              ["OPENAI_API_KEY"],
-              "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá OPENAI_API_KEY en EasyPanel y reiniciá el backend."
+              ["API_KEY_OPEN", "OPENAI_API_KEY"],
+              "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá API_KEY_OPEN (o OPENAI_API_KEY) en EasyPanel y reiniciá el backend."
             )
           )
         );
