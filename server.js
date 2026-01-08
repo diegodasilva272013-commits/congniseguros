@@ -3973,7 +3973,7 @@ app.get("/api/enterprise/captions/operation/:operationId", requireEnterpriseAuth
     let row = null;
     try {
       const r = await pool.query(
-        "SELECT operation_id, status, video_url, credits_spent, last_event, updated_at, created_at FROM captions_operations WHERE operation_id = $1 LIMIT 1",
+        "SELECT operation_id, status, video_url, credits_spent, last_event, last_payload, updated_at, created_at FROM captions_operations WHERE operation_id = $1 LIMIT 1",
         [operationId]
       );
       row = r.rows?.[0] || null;
@@ -4004,7 +4004,7 @@ app.get("/api/enterprise/captions/operation/:operationId", requireEnterpriseAuth
         }
         try {
           const rr = await pool.query(
-            "SELECT operation_id, status, video_url, credits_spent, last_event, updated_at, created_at FROM captions_operations WHERE operation_id = $1 LIMIT 1",
+            "SELECT operation_id, status, video_url, credits_spent, last_event, last_payload, updated_at, created_at FROM captions_operations WHERE operation_id = $1 LIMIT 1",
             [operationId]
           );
           row = rr.rows?.[0] || row;

@@ -3202,7 +3202,16 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="mt-3 text-[11px] text-slate-500">
-                        {capCreating ? "Generando... (esperando webhook de Captions)" : "Aún no hay video."}
+                        {capCreating
+                          ? (() => {
+                              const st = String(capStatusRow?.last_payload?.state || "").trim();
+                              const pr = capStatusRow?.last_payload?.progress;
+                              const pct = typeof pr === "number" ? Math.round(pr * 100) : null;
+                              if (st && pct !== null) return `Generando... (${st} ${pct}%)`;
+                              if (st) return `Generando... (${st})`;
+                              return "Generando...";
+                            })()
+                          : "Aún no hay video."}
                       </div>
                     )}
                   </div>
