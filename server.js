@@ -98,6 +98,9 @@ const resolveCaptionsWebhookSecret = () => String(process.env.CAPTIONS_WEBHOOK_S
 const resolveCaptionsCreatorUrl = () => String(process.env.CAPTIONS_CREATOR_URL || "").trim(); // compat: URL completa a /submit
 const resolveCaptionsSubmitUrlOverride = () => String(process.env.CAPTIONS_SUBMIT_URL || "").trim();
 const resolveCaptionsPollUrlOverride = () => String(process.env.CAPTIONS_POLL_URL || "").trim();
+const hasExplicitCaptionsSubmitUrl = () => {
+  return !!(resolveCaptionsSubmitUrlOverride() || resolveCaptionsCreatorUrl());
+};
 const resolveCaptionsBaseUrl = () => {
   const raw = String(process.env.CAPTIONS_BASE_URL || process.env.CAPTIONS_CREATOR_BASE_URL || "").trim();
   return raw ? raw.replace(/\/+$/g, "") : "";
@@ -146,8 +149,12 @@ const buildCaptionsCandidates = ({ submitOrPoll }) => {
 };
 
 const tryCaptionsSubmit = async ({ apiKey, payload }) => {
+  // Solo usar 1 URL cuando el usuario setea un endpoint explícito.
+  // Si solo hay CAPTIONS_BASE_URL (derivado), seguimos probando candidatos por compatibilidad.
   const configured = resolveCaptionsSubmitUrl();
-  const candidates = configured ? [configured] : buildCaptionsCandidates({ submitOrPoll: "submit" });
+  const candidates = hasExplicitCaptionsSubmitUrl()
+    ? [configured]
+    : buildCaptionsCandidates({ submitOrPoll: "submit" });
   let last = null;
   const attempted = [];
 
@@ -224,7 +231,11 @@ const truncateForLog = (v, max = 2000) => {
 
 const captionsPollFromApi = async ({ apiKey, operationId }) => {
   const configured = resolveCaptionsPollUrl();
-  const candidates = configured ? [configured] : buildCaptionsCandidates({ submitOrPoll: "poll" });
+  // Para poll: solo usamos un único endpoint si CAPTIONS_POLL_URL fue seteado.
+  // Si viene de base, probamos candidatos.
+  const candidates = resolveCaptionsPollUrlOverride()
+    ? [configured]
+    : buildCaptionsCandidates({ submitOrPoll: "poll" });
 
   const op = String(operationId || "").trim();
   if (!op) return null;
