@@ -129,6 +129,12 @@ const parseMaybeJson = (rawText) => {
   }
 };
 
+const truncateForLog = (v, max = 2000) => {
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  if (!s) return "";
+  return s.length > max ? `${s.slice(0, max)}…(truncated)` : s;
+};
+
 const captionsPollFromApi = async ({ apiKey, operationId }) => {
   const pollUrl = resolveCaptionsPollUrl();
   if (!pollUrl) return null;
@@ -3735,15 +3741,35 @@ app.post("/api/enterprise/captions/create-video", requireEnterpriseAuth, async (
     const data = parseMaybeJson(rawText);
 
     if (!response.ok) {
-      return res.status(response.status).json({ status: "error", message: data?.error?.message || data?.message || "Captions error" });
+      const msg =
+        data?.error?.message ||
+        data?.message ||
+        data?.error ||
+        `Captions respondió ${response.status}`;
+
+      return res.status(response.status).json({
+        status: "error",
+        message: `Captions: ${String(msg || "error").trim()}`,
+        details: {
+          endpoint: submitUrl,
+          httpStatus: response.status,
+          response: typeof data === "object" ? data : { raw: truncateForLog(data) },
+          responseRaw: truncateForLog(rawText),
+        },
+      });
     }
 
     const operationId = String(data?.operationId || data?.operation_id || data?.id || "").trim();
     if (!operationId) {
       return res.status(500).json({
         status: "error",
-        message: "Captions no devolvió operationId. Necesito el endpoint/payload correcto de creación.",
-        details: data,
+        message: "Captions no devolvió operationId. Requiere ajustar endpoint/payload.",
+        details: {
+          endpoint: submitUrl,
+          response: data,
+          responseRaw: truncateForLog(rawText),
+          expected: "operationId",
+        },
       });
     }
 

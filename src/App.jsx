@@ -942,7 +942,8 @@ export default function App() {
       const data = raw ? JSON.parse(raw) : { status: "error", message: "Respuesta vacía del servidor" };
 
       if (!res.ok || data.status !== "success") {
-        throw new Error(data.message || "No se pudo iniciar el video");
+        const detailsText = data?.details ? `\n\nDetalles: ${JSON.stringify(data.details, null, 2)}` : "";
+        throw new Error((data.message || "No se pudo iniciar el video") + detailsText);
       }
 
       const op = String(data.operationId || "").trim();
