@@ -676,6 +676,13 @@ export default function App() {
   const [rsScript, setRsScript] = useState("");
   const [rsLoading, setRsLoading] = useState(false);
 
+  // Captions (video con avatar) - Enterprise
+  const [capOpId, setCapOpId] = useState("");
+  const [capStatusRow, setCapStatusRow] = useState(null);
+  const [capVideoUrl, setCapVideoUrl] = useState("");
+  const [capCreating, setCapCreating] = useState(false);
+  const capPollRef = useRef(null);
+
   // PERFIL ASEGURADORA
   const [perfilLoading, setPerfilLoading] = useState(false);
   const [perfil, setPerfil] = useState({
@@ -758,6 +765,14 @@ export default function App() {
   };
 
   const resetEnterpriseSession = () => {
+    try {
+      if (capPollRef.current) {
+        clearInterval(capPollRef.current);
+        capPollRef.current = null;
+      }
+    } catch {
+      // ignore
+    }
     setEnterpriseMode("auth");
     setEnterpriseEmailStep(null);
     setEnterpriseCodeDigits(["", "", "", "", "", ""]);
@@ -767,6 +782,10 @@ export default function App() {
     setRsAvatar("auto");
     setRsScript("");
     setRsLoading(false);
+    setCapOpId("");
+    setCapStatusRow(null);
+    setCapVideoUrl("");
+    setCapCreating(false);
     try {
       sessionStorage.removeItem("enterprise_token");
       sessionStorage.removeItem("enterprise_user");
@@ -869,6 +888,125 @@ export default function App() {
       showMessage(err.message, "error");
     } finally {
       setRsLoading(false);
+    }
+  };
+
+  const enterpriseFetchCaptionsOperation = async (operationId) => {
+    if (!enterpriseToken) throw new Error("Iniciá sesión en Enterprise.");
+    const op = String(operationId || "").trim();
+    if (!op) throw new Error("operationId inválido");
+
+    const res = await fetch(`/api/enterprise/captions/operation/${encodeURIComponent(op)}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${enterpriseToken}`,
+      },
+    });
+    const raw = await res.text();
+    const data = raw ? JSON.parse(raw) : { status: "error", message: "Respuesta vacía del servidor" };
+    if (!res.ok || data.status !== "success") {
+      throw new Error(data.message || "No se pudo consultar la operación");
+    }
+    return data.data;
+  };
+
+  const enterpriseCreateVideoWithAvatar = async () => {
+    const script = String(rsScript || "").trim();
+    if (!script) return showMessage("Primero generá (o pegá) un guión.", "error");
+    if (!enterpriseToken) return showMessage("Iniciá sesión en Enterprise.", "error");
+
+    try {
+      if (capPollRef.current) {
+        clearInterval(capPollRef.current);
+        capPollRef.current = null;
+      }
+    } catch {
+      // ignore
+    }
+
+    setCapCreating(true);
+    setCapVideoUrl("");
+    setCapStatusRow(null);
+    setCapOpId("");
+
+    try {
+      const res = await fetch("/api/enterprise/captions/create-video", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${enterpriseToken}`,
+        },
+        body: JSON.stringify({ script, avatar: rsAvatar }),
+      });
+      const raw = await res.text();
+      const data = raw ? JSON.parse(raw) : { status: "error", message: "Respuesta vacía del servidor" };
+
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.message || "No se pudo iniciar el video");
+      }
+
+      const op = String(data.operationId || "").trim();
+      if (!op) throw new Error("No se recibió operationId");
+
+      setCapOpId(op);
+      showMessage("Video en proceso. Esperá unos segundos...", "info");
+
+      const tick = async () => {
+        try {
+          const row = await enterpriseFetchCaptionsOperation(op);
+          setCapStatusRow(row || null);
+          const st = String(row?.status || "").toUpperCase();
+          const url = String(row?.video_url || "").trim();
+          if (st === "SUCCESS" && url) {
+            setCapVideoUrl(url);
+            setCapCreating(false);
+            try {
+              if (capPollRef.current) {
+                clearInterval(capPollRef.current);
+                capPollRef.current = null;
+              }
+            } catch {
+              // ignore
+            }
+            showMessage("Video listo.", "success");
+          }
+          if (st === "FAILURE") {
+            setCapCreating(false);
+            try {
+              if (capPollRef.current) {
+                clearInterval(capPollRef.current);
+                capPollRef.current = null;
+              }
+            } catch {
+              // ignore
+            }
+            showMessage("Falló la generación del video.", "error");
+          }
+        } catch {
+          // si todavía no existe el registro o falla momentáneamente, seguimos
+        }
+      };
+
+      // primer fetch inmediato + polling
+      await tick();
+      capPollRef.current = setInterval(tick, 2500);
+    } catch (err) {
+      setCapCreating(false);
+      showMessage(err.message || "No se pudo iniciar el video", "error");
+    }
+  };
+
+  const enterpriseRefreshCaptionsOperation = async () => {
+    try {
+      const op = String(capOpId || "").trim();
+      if (!op) return;
+      const row = await enterpriseFetchCaptionsOperation(op);
+      setCapStatusRow(row || null);
+      const st = String(row?.status || "").toUpperCase();
+      const url = String(row?.video_url || "").trim();
+      if (st === "SUCCESS" && url) setCapVideoUrl(url);
+    } catch (e) {
+      showMessage(e.message || "No se pudo actualizar", "error");
     }
   };
 
@@ -3010,6 +3148,64 @@ export default function App() {
                 />
 
                 <div className="mt-3 text-[11px] text-slate-500">Tip: podés editar el texto antes de copiar.</div>
+
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={enterpriseCreateVideoWithAvatar}
+                    disabled={capCreating || !String(rsScript || "").trim()}
+                    className="px-5 py-3 rounded-2xl bg-slate-900 text-white text-xs font-black hover:bg-black flex items-center gap-2 disabled:opacity-60"
+                  >
+                    {capCreating ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                    Crear video con avatar
+                  </button>
+
+                  {capOpId ? (
+                    <button
+                      type="button"
+                      onClick={enterpriseRefreshCaptionsOperation}
+                      className="px-4 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-black flex items-center gap-2"
+                    >
+                      <RefreshCcw size={16} /> Actualizar
+                    </button>
+                  ) : null}
+                </div>
+
+                {capOpId ? (
+                  <div className="mt-4 border border-slate-200 rounded-2xl p-4 bg-slate-50">
+                    <div className="text-xs font-black text-slate-700">Video (Captions)</div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      Operación: <span className="font-black text-slate-700">{capOpId}</span>
+                      {capStatusRow?.status ? (
+                        <>
+                          {" "}— Estado: <span className="font-black text-slate-700">{String(capStatusRow.status)}</span>
+                        </>
+                      ) : null}
+                    </div>
+
+                    {capVideoUrl ? (
+                      <div className="mt-3 space-y-3">
+                        <video
+                          src={capVideoUrl}
+                          controls
+                          className="w-full rounded-2xl border border-slate-200 bg-white"
+                        />
+                        <a
+                          href={capVideoUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-black text-slate-800"
+                        >
+                          <Download size={16} /> Descargar
+                        </a>
+                      </div>
+                    ) : (
+                      <div className="mt-3 text-[11px] text-slate-500">
+                        {capCreating ? "Generando... (esperando webhook de Captions)" : "Aún no hay video."}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>

@@ -92,6 +92,120 @@ const ensureEmailCodesTable = async () => {
   );
 };
 
+// ===== CAPTIONS (AI Creator) =====
+const resolveCaptionsApiKey = () => String(process.env.api_key_captios || process.env.API_KEY_CAPTIOS || "").trim();
+const resolveCaptionsWebhookSecret = () => String(process.env.CAPTIONS_WEBHOOK_SECRET || "").trim();
+const resolveCaptionsCreatorUrl = () => String(process.env.CAPTIONS_CREATOR_URL || "").trim(); // compat: URL completa a /submit
+const resolveCaptionsBaseUrl = () => {
+  const raw = String(process.env.CAPTIONS_BASE_URL || process.env.CAPTIONS_CREATOR_BASE_URL || "").trim();
+  return raw ? raw.replace(/\/+$/g, "") : "";
+};
+const resolveCaptionsSubmitUrl = () => {
+  const direct = resolveCaptionsCreatorUrl();
+  if (direct) return direct;
+  const base = resolveCaptionsBaseUrl();
+  return base ? `${base}/submit` : "";
+};
+const resolveCaptionsPollUrl = () => {
+  const base = resolveCaptionsBaseUrl();
+  return base ? `${base}/poll` : "";
+};
+
+const captionsAuthHeaders = (apiKey) => {
+  const k = String(apiKey || "").trim();
+  return {
+    // intentamos ambos formatos comunes (docs varían)
+    "x-api-key": k,
+    Authorization: `Bearer ${k}`,
+  };
+};
+
+const parseMaybeJson = (rawText) => {
+  if (!rawText) return {};
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return { raw: rawText };
+  }
+};
+
+const captionsPollFromApi = async ({ apiKey, operationId }) => {
+  const pollUrl = resolveCaptionsPollUrl();
+  if (!pollUrl) return null;
+
+  const op = String(operationId || "").trim();
+  if (!op) return null;
+
+  // 1) GET /poll?operationId=...
+  let resp;
+  try {
+    const u = new URL(pollUrl);
+    u.searchParams.set("operationId", op);
+    resp = await fetch(u.toString(), {
+      method: "GET",
+      headers: captionsAuthHeaders(apiKey),
+    });
+  } catch {
+    resp = null;
+  }
+
+  // 2) fallback POST /poll {operationId}
+  if (!resp || !resp.ok) {
+    try {
+      resp = await fetch(pollUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...captionsAuthHeaders(apiKey) },
+        body: JSON.stringify({ operationId: op }),
+      });
+    } catch {
+      resp = null;
+    }
+  }
+
+  if (!resp || !resp.ok) return null;
+
+  const rawText = await resp.text();
+  const data = parseMaybeJson(rawText);
+
+  const url = String(data?.url || data?.videoUrl || data?.video_url || "").trim();
+  const creditsSpent = data?.creditsSpent ?? data?.credits_spent ?? null;
+  const statusRaw = String(data?.status || data?.state || data?.event || "").trim().toUpperCase();
+
+  let status = "PENDING";
+  if (url) status = "SUCCESS";
+  if (/SUCCESS/.test(statusRaw)) status = "SUCCESS";
+  if (/FAIL|ERROR/.test(statusRaw)) status = "FAILURE";
+
+  return {
+    status,
+    url: url || null,
+    creditsSpent,
+    lastEvent: data?.event ? String(data.event) : "creator.poll",
+    payload: data,
+  };
+};
+
+const ensureCaptionsSchema = async () => {
+  // Tabla en MASTER_DB para tracking de operaciones (Enterprise).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS captions_operations (
+      operation_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      requested_by_user_id BIGINT,
+      requested_by_email TEXT,
+      avatar TEXT,
+      script TEXT,
+      video_url TEXT,
+      credits_spent NUMERIC,
+      last_event TEXT,
+      last_payload JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS ix_captions_operations_status_created ON captions_operations(status, created_at)");
+};
+
 const createEmailCodeAndSend = async ({ email, purpose }) => {
   const emailNorm = normalizeEmailLower(email);
   const p = String(purpose || "").trim();
@@ -963,6 +1077,9 @@ pool.query("SELECT NOW()").then(() => {
 
   // Auditoría (evita crash si falta la tabla)
   ensureAuditoriaSchema().catch(() => {});
+
+  // Captions (Enterprise video)
+  ensureCaptionsSchema().catch(() => {});
 
   // Asegurar columnas mínimas en master DB (migración liviana)
   pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS pais VARCHAR(2) DEFAULT 'AR'").catch(() => {});
@@ -3566,6 +3683,194 @@ app.post("/api/marketing/social-script", requireEnterpriseAuth, async (req, res)
     const data = await response.json();
     const script = data?.choices?.[0]?.message?.content?.trim() || "";
     return res.json({ status: "success", script });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== CAPTIONS: CREAR VIDEO (Enterprise) =====
+app.post("/api/enterprise/captions/create-video", requireEnterpriseAuth, async (req, res) => {
+  try {
+    const apiKey = resolveCaptionsApiKey();
+    const submitUrl = resolveCaptionsSubmitUrl();
+
+    if (!apiKey) {
+      return res
+        .status(503)
+        .json(toSafeApiErrorBody(makeConfigError("captions", ["api_key_captios"], "Captions no configurado. Seteá api_key_captios en EasyPanel.")));
+    }
+    if (!submitUrl) {
+      return res
+        .status(503)
+        .json(
+          toSafeApiErrorBody(
+            makeConfigError(
+              "captions",
+              ["CAPTIONS_BASE_URL", "CAPTIONS_CREATOR_URL"],
+              "Falta CAPTIONS_BASE_URL o CAPTIONS_CREATOR_URL. Con tus docs: seteá CAPTIONS_BASE_URL con la base y el server usa /submit y /poll automáticamente."
+            )
+          )
+        );
+    }
+
+    const script = String(req.body?.script || "").trim();
+    const avatar = String(req.body?.avatar || "auto").trim();
+
+    if (!script) return res.status(400).json({ status: "error", message: "script requerido" });
+    if (script.length > 8000) return res.status(400).json({ status: "error", message: "script demasiado largo" });
+
+    // Payload mínimo: tus docs muestran /submit y /poll, así que usamos /submit.
+    const payload = { script, avatar, language: "es" };
+
+    const response = await fetch(submitUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...captionsAuthHeaders(apiKey),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const rawText = await response.text();
+    const data = parseMaybeJson(rawText);
+
+    if (!response.ok) {
+      return res.status(response.status).json({ status: "error", message: data?.error?.message || data?.message || "Captions error" });
+    }
+
+    const operationId = String(data?.operationId || data?.operation_id || data?.id || "").trim();
+    if (!operationId) {
+      return res.status(500).json({
+        status: "error",
+        message: "Captions no devolvió operationId. Necesito el endpoint/payload correcto de creación.",
+        details: data,
+      });
+    }
+
+    try {
+      const email = String(req.enterpriseUser?.email || "").trim();
+      const userId = Number(req.enterpriseUser?.id || 0) || null;
+      await pool.query(
+        `INSERT INTO captions_operations (operation_id, status, requested_by_user_id, requested_by_email, avatar, script, last_event, last_payload)
+         VALUES ($1, 'PENDING', $2, $3, $4, $5, 'creator.requested', $6)
+         ON CONFLICT (operation_id) DO UPDATE SET
+           status = EXCLUDED.status,
+           requested_by_user_id = COALESCE(EXCLUDED.requested_by_user_id, captions_operations.requested_by_user_id),
+           requested_by_email = COALESCE(NULLIF(EXCLUDED.requested_by_email,''), captions_operations.requested_by_email),
+           avatar = EXCLUDED.avatar,
+           script = EXCLUDED.script,
+           last_event = EXCLUDED.last_event,
+           last_payload = EXCLUDED.last_payload,
+           updated_at = NOW()`,
+        [operationId, userId, email || null, avatar, script, JSON.stringify(data)]
+      );
+    } catch {
+      // no bloquear si falla tracking
+    }
+
+    return res.json({ status: "success", operationId });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// Estado de operación (Enterprise)
+app.get("/api/enterprise/captions/operation/:operationId", requireEnterpriseAuth, async (req, res) => {
+  try {
+    const operationId = String(req.params?.operationId || "").trim();
+    if (!operationId) return res.status(400).json({ status: "error", message: "operationId requerido" });
+
+    // 1) estado desde DB
+    let row = null;
+    try {
+      const r = await pool.query(
+        "SELECT operation_id, status, video_url, credits_spent, last_event, updated_at, created_at FROM captions_operations WHERE operation_id = $1 LIMIT 1",
+        [operationId]
+      );
+      row = r.rows?.[0] || null;
+    } catch {
+      row = null;
+    }
+
+    // 2) fallback: si no hay row o está pendiente, intentamos /poll (si hay CAPTIONS_BASE_URL)
+    const apiKey = resolveCaptionsApiKey();
+    if (apiKey && (!row || String(row.status || "").toUpperCase() === "PENDING")) {
+      const polled = await captionsPollFromApi({ apiKey, operationId });
+      if (polled) {
+        try {
+          await pool.query(
+            `INSERT INTO captions_operations (operation_id, status, video_url, credits_spent, last_event, last_payload)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (operation_id) DO UPDATE SET
+               status = EXCLUDED.status,
+               video_url = COALESCE(NULLIF(EXCLUDED.video_url,''), captions_operations.video_url),
+               credits_spent = COALESCE(EXCLUDED.credits_spent, captions_operations.credits_spent),
+               last_event = EXCLUDED.last_event,
+               last_payload = EXCLUDED.last_payload,
+               updated_at = NOW()`,
+            [operationId, polled.status, polled.url, polled.creditsSpent ?? null, polled.lastEvent, JSON.stringify(polled.payload || {})]
+          );
+        } catch {
+          // ignore
+        }
+        try {
+          const rr = await pool.query(
+            "SELECT operation_id, status, video_url, credits_spent, last_event, updated_at, created_at FROM captions_operations WHERE operation_id = $1 LIMIT 1",
+            [operationId]
+          );
+          row = rr.rows?.[0] || row;
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (!row) return res.status(404).json({ status: "error", message: "Operación no encontrada" });
+    return res.json({ status: "success", data: row });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// Webhook receiver (Captions -> nosotros)
+app.post("/api/webhooks/captions", async (req, res) => {
+  try {
+    const expected = resolveCaptionsWebhookSecret();
+    if (expected) {
+      const auth = String(req.headers?.authorization || "").trim();
+      const ok = auth === `Bearer ${expected}`;
+      if (!ok) return res.status(401).json({ status: "error", message: "Unauthorized" });
+    }
+
+    const event = String(req.body?.event || "").trim();
+    const operationId = String(req.body?.operationId || req.body?.operation_id || "").trim();
+    const url = String(req.body?.url || "").trim();
+    const creditsSpent = req.body?.creditsSpent;
+
+    if (!event || !operationId) {
+      return res.status(400).json({ status: "error", message: "event y operationId requeridos" });
+    }
+
+    const nextStatus = /success/i.test(event) ? "SUCCESS" : /failure|error/i.test(event) ? "FAILURE" : "PENDING";
+
+    try {
+      await pool.query(
+        `INSERT INTO captions_operations (operation_id, status, video_url, credits_spent, last_event, last_payload)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (operation_id) DO UPDATE SET
+           status = EXCLUDED.status,
+           video_url = COALESCE(NULLIF(EXCLUDED.video_url,''), captions_operations.video_url),
+           credits_spent = COALESCE(EXCLUDED.credits_spent, captions_operations.credits_spent),
+           last_event = EXCLUDED.last_event,
+           last_payload = EXCLUDED.last_payload,
+           updated_at = NOW()`,
+        [operationId, nextStatus, url || null, creditsSpent ?? null, event, JSON.stringify(req.body || {})]
+      );
+    } catch {
+      // ignore
+    }
+
+    return res.json({ status: "success" });
   } catch (err) {
     return res.status(500).json({ status: "error", message: err.message });
   }
