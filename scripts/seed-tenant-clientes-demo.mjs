@@ -3,15 +3,15 @@ import pkg from "pg";
 
 const { Pool } = pkg;
 
-const aseguradoraId = Number(process.argv[2] || "");
-const count = Number(process.argv[3] || 300);
+const idOrEmail = String(process.argv[2] || "").trim();
+const countArg = process.argv[3];
+const count = Number(countArg || 300);
 
 const reset = process.argv.includes("--reset");
 const wipeDemo = process.argv.includes("--wipe-demo");
 
 if (!Number.isFinite(aseguradoraId)) {
-  console.error("Usage: node scripts/seed-tenant-clientes-demo.mjs <aseguradoraId> [count=300] [--reset] [--wipe-demo]");
-  process.exit(1);
+  // placeholder: aseguradoraId se resuelve abajo (email o UUID)
 }
 if (!Number.isFinite(count) || count <= 0) {
   console.error("Invalid count. Must be a positive number.");
@@ -33,13 +33,40 @@ const y = today.getFullYear();
 const m = String(today.getMonth() + 1).padStart(2, "0");
 const d = String(today.getDate()).padStart(2, "0");
 const stamp = `${y}${m}${d}`;
-const docPrefix = `DEMO-${stamp}-${aseguradoraId}`;
+// Tenant schema: clientes.documento es VARCHAR(20). Usamos prefijo corto + secuencia.
+// Ej: D2601080000123 (14 chars)
+const docPrefix = `D${stamp.slice(2)}`;
 
 const getTenantDbNameForUserId = (id) => `${process.env.TENANT_DB_PREFIX || "cogniseguros_tenant_"}${id}`;
+
+if (!idOrEmail) {
+  console.error(
+    "Usage: node scripts/seed-tenant-clientes-demo.mjs <aseguradoraId|email> [count=300] [--reset] [--wipe-demo]"
+  );
+  process.exit(1);
+}
+
+const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+let aseguradoraId = "";
+
+if (idOrEmail.includes("@")) {
+  const u = await master.query("SELECT id FROM usuarios WHERE lower(email) = lower($1) LIMIT 1", [idOrEmail]);
+  aseguradoraId = String(u.rows[0]?.id || "").trim();
+  if (!aseguradoraId) {
+    console.error("No se encontró usuario con ese email en master. Email:", idOrEmail);
+    process.exit(1);
+  }
+} else if (uuidRe.test(idOrEmail)) {
+  aseguradoraId = idOrEmail;
+} else {
+  console.error("Identificador inválido. Pasá un UUID o un email. Recibido:", idOrEmail);
+  process.exit(1);
+}
 
 const r = await master.query("SELECT tenant_db FROM usuarios WHERE id = $1", [aseguradoraId]);
 const tenantDb = (r.rows[0]?.tenant_db || "").trim() || getTenantDbNameForUserId(aseguradoraId);
 
+console.log("aseguradoraId:", aseguradoraId);
 console.log("tenantDb:", tenantDb);
 console.log("count:", count);
 console.log("docPrefix:", docPrefix);
@@ -72,7 +99,7 @@ const wipeDemoRows = async () => {
 };
 
 const wipePrefixRows = async () => {
-  const like = `${docPrefix}-%`;
+  const like = `${docPrefix}%`;
   const del = await tenant.query("DELETE FROM clientes WHERE documento LIKE $1", [like]);
   console.log("deleted_prefix_rows:", del.rowCount);
 };
@@ -136,7 +163,7 @@ SELECT
   s.apellidos[(floor(random() * array_length(s.apellidos, 1)) + 1)::int] AS apellido,
   ('cliente' || m.n::text || '@demo.cogniseguros.local') AS mail,
   ('+54911' || lpad((10000000 + (m.n % 90000000))::text, 8, '0')) AS telefono,
-  ((SELECT doc_prefix FROM params) || '-' || lpad(m.n::text, 5, '0')) AS documento,
+  ((SELECT doc_prefix FROM params) || lpad(m.n::text, 7, '0')) AS documento,
   (s.rubros[(floor(random() * array_length(s.rubros, 1)) + 1)::int] || ' #' || (1000+m.n)::text) AS polizas,
   ('0800-' || lpad((1000 + (m.n % 9000))::text, 4, '0')) AS grua_telefono,
   (CASE WHEN random() < 0.5 THEN 'Grúa Norte' ELSE 'Auxilio 24hs' END) AS grua_nombre,
@@ -178,7 +205,7 @@ try {
       SUM(CASE WHEN (fecha_fin_str ~ '^\\d{4}-\\d{2}-\\d{2}$') AND (fecha_fin_str::date >= CURRENT_DATE) THEN 1 ELSE 0 END)::int AS fin_futuro
     FROM clientes
     WHERE documento LIKE $1`,
-    [`${docPrefix}-%`]
+    [`${docPrefix}%`]
   );
 
   console.log("seed_stats:", stats.rows[0]);
