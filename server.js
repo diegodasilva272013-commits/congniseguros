@@ -3417,6 +3417,86 @@ app.post("/api/marketing/image", async (req, res) => {
   }
 });
 
+// ===== OPENAI: REDES SOCIALES (GUIÓN) =====
+app.post("/api/marketing/social-script", async (req, res) => {
+  try {
+    const { idea, avatar } = req.body;
+    const baseIdea = String(idea || "").trim();
+    if (!baseIdea) {
+      return res.status(400).json({ status: "error", message: "Idea vacía" });
+    }
+
+    const apiKey = await resolveOpenAiApiKeyForReq(req);
+    const looksPlaceholder =
+      !apiKey ||
+      /tu[_-]?openai/i.test(apiKey) ||
+      /_aqui$/i.test(apiKey) ||
+      /^YOUR_/i.test(apiKey);
+    if (looksPlaceholder) {
+      return res
+        .status(503)
+        .json(
+          toSafeApiErrorBody(
+            makeConfigError(
+              "openai",
+              ["OPENAI_API_KEY"],
+              "OpenAI no configurado. Guardá una API key en Configuración (OpenAI) o configurá OPENAI_API_KEY en EasyPanel y reiniciá el backend."
+            )
+          )
+        );
+    }
+
+    const avatarKey = String(avatar || "auto").trim().toLowerCase();
+    const avatarMap = {
+      auto: "Asesor/a de seguros de AUTO. Enfoque: asistencia 24/7, responsabilidad civil, todo riesgo, siniestros.",
+      vida: "Asesor/a de SEGURO DE VIDA. Enfoque: protección familiar, tranquilidad, claridad y empatía.",
+      hogar: "Asesor/a de SEGURO DE HOGAR. Enfoque: robo, incendio, hogar protegido, soluciones simples.",
+      comercio: "Asesor/a de SEGURO PARA COMERCIO. Enfoque: continuidad del negocio, responsabilidad civil, robo/incendio."
+    };
+    const avatarDesc = avatarMap[avatarKey] || avatarMap.auto;
+
+    const system =
+      "Sos un guionista profesional para videos cortos (Reels/TikTok) de una aseguradora. " +
+      "Español rioplatense neutro. Sin emojis. " +
+      "Duración objetivo: máximo 1 minuto (ideal 110 a 140 palabras). " +
+      "Devolvé SOLO el guión final en 3 secciones con estos títulos exactos: " +
+      "HOOK:, CUERPO:, CTA:. " +
+      "Cada sección en 1 a 3 líneas, claro y directo. " +
+      "Evitar promesas absolutas y jerga técnica; no menciones OpenAI.";
+
+    const user =
+      `Avatar / rol: ${avatarDesc}\n` +
+      `Idea base: ${baseIdea}`;
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        temperature: 0.7,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      return res.status(response.status).json({ status: "error", message: err.error?.message || "OpenAI error" });
+    }
+
+    const data = await response.json();
+    const script = data?.choices?.[0]?.message?.content?.trim() || "";
+    return res.json({ status: "success", script });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
 // ===== MEMBRESÍA: PLANES =====
 app.get("/api/planes", async (req, res) => {
   try {

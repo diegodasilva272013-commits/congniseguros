@@ -46,6 +46,7 @@ import {
   DollarSign,
   Filter,
   Printer,
+  Share2,
 } from "lucide-react";
 
 /* ================== CONFIG ================== */
@@ -288,6 +289,10 @@ async function request(payload) {
     },
     generateAdCopy: { url: "/api/marketing/copy", body: { aseguradora_id: rest.aseguradora_id, prompt: rest.prompt } },
     generateAdImageOpenAI: { url: "/api/marketing/image", body: rest },
+    generateSocialScript: {
+      url: "/api/marketing/social-script",
+      body: { aseguradora_id: rest.aseguradora_id, idea: rest.idea, avatar: rest.avatar },
+    },
     setUserPais: { url: "/api/usuarios/set-pais", body: { aseguradora_id: rest.aseguradora_id, pais: rest.pais } },
   };
   
@@ -542,7 +547,7 @@ export default function App() {
   const [authView, setAuthView] = useState("login"); // login | register
   const [authPais, setAuthPais] = useState("AR");
   // ✅ NUEVO: pagos
-  const [menu, setMenu] = useState("cartera"); // cartera | vencimientos | pagos | mensajes | config | marketing | perfil
+  const [menu, setMenu] = useState("cartera"); // cartera | vencimientos | pagos | mensajes | config | marketing | redes | perfil
 
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState({ message: "", type: "" });
@@ -644,6 +649,12 @@ export default function App() {
   const [mkCopyLoading, setMkCopyLoading] = useState(false);
   const [mkImgLoading, setMkImgLoading] = useState(false);
   const [mkImage, setMkImage] = useState("");
+
+  // Redes Sociales (IA)
+  const [rsIdea, setRsIdea] = useState("");
+  const [rsAvatar, setRsAvatar] = useState("auto"); // auto | vida | hogar | comercio
+  const [rsScript, setRsScript] = useState("");
+  const [rsLoading, setRsLoading] = useState(false);
 
   // PERFIL ASEGURADORA
   const [perfilLoading, setPerfilLoading] = useState(false);
@@ -1877,6 +1888,26 @@ export default function App() {
       showMessage(e.message, "error");
     } finally {
       setMkImgLoading(false);
+    }
+  };
+
+  const generateSocialScript = async () => {
+    const idea = String(rsIdea || "").trim();
+    if (!idea) return showMessage("Escribí una idea base para el guión.", "error");
+    setRsLoading(true);
+    try {
+      const res = await request({
+        action: "generateSocialScript",
+        aseguradora_id: user.id,
+        idea,
+        avatar: rsAvatar,
+      });
+      setRsScript(String(res.script || "").trim());
+      showMessage("Guión generado.", "success");
+    } catch (e) {
+      showMessage(e.message, "error");
+    } finally {
+      setRsLoading(false);
     }
   };
 
@@ -3523,6 +3554,12 @@ export default function App() {
               onClick={() => setMenu("marketing")}
             />
             <MenuBtn
+              active={menu === "redes"}
+              icon={<Share2 size={16} />}
+              label="Redes Sociales"
+              onClick={() => setMenu("redes")}
+            />
+            <MenuBtn
               active={menu === "perfil"}
               icon={<Building2 size={16} />}
               label="Perfil"
@@ -4459,6 +4496,96 @@ export default function App() {
                     ) : (
                       <div className="text-sm text-slate-500">Generá una imagen para verla acá.</div>
                     )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* REDES SOCIALES */}
+          {menu === "redes" && (
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+                <div>
+                  <div className="text-xl font-black text-slate-900 flex items-center gap-2">
+                    <Share2 size={18} /> Redes Sociales
+                  </div>
+                  <div className="text-sm text-slate-500">Guión de influencer (Hook/Cuerpo/CTA) — máximo 1 minuto.</div>
+                </div>
+                <button
+                  onClick={openSupport}
+                  className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-black flex items-center gap-2"
+                >
+                  <MessageCircle size={16} /> Soporte
+                </button>
+              </div>
+
+              <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="border border-slate-200 rounded-3xl p-5">
+                  <div className="font-black text-slate-900 mb-2">Idea base</div>
+                  <textarea
+                    value={rsIdea}
+                    onChange={(e) => setRsIdea(e.target.value)}
+                    placeholder="Ej: Seguro de auto para jóvenes, asistencia 24/7 y descuento por buen conductor..."
+                    className="w-full h-40 px-4 py-3 border border-slate-300 rounded-2xl outline-none resize-none"
+                  />
+
+                  <div className="mt-4">
+                    <div className="font-black text-slate-900 mb-2">Avatar</div>
+                    <div className="flex flex-wrap gap-2">
+                      {["auto", "vida", "hogar", "comercio"].map((k) => (
+                        <button
+                          key={k}
+                          type="button"
+                          onClick={() => setRsAvatar(k)}
+                          className={
+                            "px-4 py-2 rounded-2xl text-xs font-black border " +
+                            (rsAvatar === k
+                              ? "bg-blue-600 text-white border-blue-700"
+                              : "bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-200")
+                          }
+                        >
+                          {k.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={generateSocialScript}
+                      disabled={rsLoading}
+                      className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black hover:bg-blue-700 flex items-center gap-2 disabled:opacity-60"
+                    >
+                      {rsLoading ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
+                      Generar guión
+                    </button>
+                  </div>
+                </div>
+
+                <div className="border border-slate-200 rounded-3xl p-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="font-black text-slate-900">Guión final</div>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(rsScript)}
+                      className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-black flex items-center gap-2"
+                      disabled={!String(rsScript || "").trim()}
+                    >
+                      <Copy size={14} /> Copiar
+                    </button>
+                  </div>
+
+                  <textarea
+                    value={rsScript}
+                    onChange={(e) => setRsScript(e.target.value)}
+                    placeholder="Acá aparece el guión (HOOK / CUERPO / CTA)..."
+                    className="w-full h-56 px-4 py-3 border border-slate-300 rounded-2xl outline-none resize-none"
+                  />
+
+                  <div className="mt-3 text-[11px] text-slate-500">
+                    Tip: podés editar el texto antes de copiar.
                   </div>
                 </div>
               </div>
