@@ -96,17 +96,23 @@ const ensureEmailCodesTable = async () => {
 const resolveCaptionsApiKey = () => String(process.env.api_key_captios || process.env.API_KEY_CAPTIOS || "").trim();
 const resolveCaptionsWebhookSecret = () => String(process.env.CAPTIONS_WEBHOOK_SECRET || "").trim();
 const resolveCaptionsCreatorUrl = () => String(process.env.CAPTIONS_CREATOR_URL || "").trim(); // compat: URL completa a /submit
+const resolveCaptionsSubmitUrlOverride = () => String(process.env.CAPTIONS_SUBMIT_URL || "").trim();
+const resolveCaptionsPollUrlOverride = () => String(process.env.CAPTIONS_POLL_URL || "").trim();
 const resolveCaptionsBaseUrl = () => {
   const raw = String(process.env.CAPTIONS_BASE_URL || process.env.CAPTIONS_CREATOR_BASE_URL || "").trim();
   return raw ? raw.replace(/\/+$/g, "") : "";
 };
 const resolveCaptionsSubmitUrl = () => {
+  const override = resolveCaptionsSubmitUrlOverride();
+  if (override) return override;
   const direct = resolveCaptionsCreatorUrl();
   if (direct) return direct;
   const base = resolveCaptionsBaseUrl();
   return base ? `${base}/submit` : "";
 };
 const resolveCaptionsPollUrl = () => {
+  const override = resolveCaptionsPollUrlOverride();
+  if (override) return override;
   const base = resolveCaptionsBaseUrl();
   return base ? `${base}/poll` : "";
 };
@@ -3712,8 +3718,8 @@ app.post("/api/enterprise/captions/create-video", requireEnterpriseAuth, async (
           toSafeApiErrorBody(
             makeConfigError(
               "captions",
-              ["CAPTIONS_BASE_URL", "CAPTIONS_CREATOR_URL"],
-              "Falta CAPTIONS_BASE_URL o CAPTIONS_CREATOR_URL. Con tus docs: seteá CAPTIONS_BASE_URL con la base y el server usa /submit y /poll automáticamente."
+              ["CAPTIONS_SUBMIT_URL", "CAPTIONS_BASE_URL", "CAPTIONS_CREATOR_URL"],
+              "Falta CAPTIONS_SUBMIT_URL (recomendado) o CAPTIONS_BASE_URL/CAPTIONS_CREATOR_URL. Si tu base no tiene /submit, seteá CAPTIONS_SUBMIT_URL con la URL exacta del endpoint de creación."
             )
           )
         );
