@@ -3477,19 +3477,11 @@ app.post("/api/admin/invitaciones/crear", async (req, res) => {
     const paisNorm = normalizePais(pais);
     const paisesNorm = normalizePaisList(paises, paisNorm);
 
-    // Trial: si no viene dias_trial, default 2 para plan FREE.
-    let trialDays = 0;
+    // Trial por invitacion: si no viene dias_trial, default 2.
+    let trialDays = 2;
     const diasTrialRaw = Number(dias_trial ?? 0);
     if (Number.isFinite(diasTrialRaw) && diasTrialRaw > 0) {
       trialDays = Math.min(30, Math.floor(diasTrialRaw));
-    } else {
-      try {
-        const plan = await db.query("SELECT nombre FROM planes WHERE id = $1 LIMIT 1", [plan_id]);
-        const planName = String(plan.rows?.[0]?.nombre || "").trim().toUpperCase();
-        if (planName === "FREE") trialDays = 2;
-      } catch {
-        // ignore
-      }
     }
 
     const invitaciones = [];
@@ -3903,7 +3895,7 @@ app.post("/auth/invite/claim", async (req, res) => {
       // Aplicar trial por invitación al usuario ya creado (si aún no tiene trial cargado).
       try {
         const trialDaysRaw = Number(invitacion?.trial_days ?? 0);
-        const trialDays = Number.isFinite(trialDaysRaw) && trialDaysRaw > 0 ? Math.min(30, Math.floor(trialDaysRaw)) : 0;
+        const trialDays = Number.isFinite(trialDaysRaw) && trialDaysRaw > 0 ? Math.min(30, Math.floor(trialDaysRaw)) : 2;
         if (trialDays > 0) {
           await client.query(
             `UPDATE usuarios
