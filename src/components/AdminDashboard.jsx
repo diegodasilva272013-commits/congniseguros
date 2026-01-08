@@ -248,6 +248,52 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleCreateUser = async () => {
+    const { email, nombre, plan_id } = modalData;
+    if (!email || !plan_id) {
+      alert("Completa todos los campos");
+      return;
+    }
+
+    const pais = normalizePais(modalData.pais);
+    const paises = paisesFromFlags(modalData.paisesFlags, pais);
+
+    const diasTrialRaw = Number(modalData.dias_trial);
+    const dias_trial = Number.isFinite(diasTrialRaw) && diasTrialRaw >= 0 ? Math.min(30, Math.floor(diasTrialRaw)) : null;
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem("token");
+      const headers = { "Content-Type": "application/json" };
+      headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch("/api/admin/usuarios/crear", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          email,
+          nombre,
+          plan_id: Number(plan_id),
+          pais,
+          paises,
+          ...(String(plan_id) === "1" ? { dias_trial: dias_trial ?? 2 } : {}),
+        }),
+      });
+
+      const result = await res.json();
+      if (result.status === "success") {
+        setShowModal(false);
+        setModalData({});
+        loadData();
+      } else {
+        alert(result.message || "Error al crear usuario");
+      }
+    } catch (err) {
+      alert("Error: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleDeleteInvitation = async (id) => {
     if (!window.confirm("¿Estás seguro?")) return;
 
@@ -456,6 +502,26 @@ export default function AdminDashboard() {
             >
               <Plus size={18} />
               Nueva Invitación
+            </button>
+          )}
+
+          {tab === "usuarios" && (
+            <button
+              onClick={() => {
+                setShowModal(true);
+                setModalData({
+                  email: "",
+                  nombre: "",
+                  plan_id: "1",
+                  dias_trial: 2,
+                  pais: "AR",
+                  paisesFlags: { AR: true, UY: false },
+                });
+              }}
+              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 flex items-center gap-2"
+            >
+              <Plus size={18} />
+              Nuevo Usuario
             </button>
           )}
         </div>
@@ -1060,6 +1126,145 @@ export default function AdminDashboard() {
               >
                 {loading && <Loader2 size={16} className="animate-spin" />}
                 Crear Invitación
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Nuevo Usuario */}
+      {showModal && tab === "usuarios" && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded shadow p-6 max-w-md w-full">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold">Nuevo Usuario</h3>
+              <button onClick={() => setShowModal(false)} className="text-gray-500 hover:text-gray-700">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold mb-2">Email</label>
+                <input
+                  type="email"
+                  value={modalData.email || ""}
+                  onChange={(e) => setModalData({ ...modalData, email: e.target.value })}
+                  className="w-full p-2 border border-gray-300 rounded"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold mb-2">Nombre</label>
+                <input
+                  type="text"
+                  value={modalData.nombre || ""}
+                  onChange={(e) => setModalData({ ...modalData, nombre: e.target.value })}
+                  className="w-full p-2 border border-gray-300 rounded"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold mb-2">Licencia (Plan)</label>
+                <select
+                  value={modalData.plan_id || ""}
+                  onChange={(e) => {
+                    const nextPlan = e.target.value;
+                    const curTrial = modalData.dias_trial;
+                    const shouldDefaultTrial = String(nextPlan) === "1" && (!curTrial || Number(curTrial) <= 0);
+                    setModalData({
+                      ...modalData,
+                      plan_id: nextPlan,
+                      ...(shouldDefaultTrial ? { dias_trial: 2 } : {}),
+                    });
+                  }}
+                  className="w-full p-2 border border-gray-300 rounded"
+                >
+                  <option value="">Selecciona un plan</option>
+                  <option value="1">FREE</option>
+                  <option value="2">STARTER</option>
+                  <option value="3">PROFESSIONAL</option>
+                  <option value="4">ENTERPRISE</option>
+                </select>
+                <div className="text-xs text-gray-500 mt-1">Sin contraseñas: el usuario entra por OTP al email.</div>
+              </div>
+
+              {String(modalData.plan_id) === "1" && (
+                <div>
+                  <label className="block text-sm font-bold mb-2">Trial (días)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={30}
+                    value={modalData.dias_trial ?? 2}
+                    onChange={(e) => setModalData({ ...modalData, dias_trial: e.target.value })}
+                    className="w-full p-2 border border-gray-300 rounded"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-bold mb-2">País activo</label>
+                <select
+                  value={normalizePais(modalData.pais)}
+                  onChange={(e) => {
+                    const pais = normalizePais(e.target.value);
+                    const flags = { ...(modalData.paisesFlags || { AR: false, UY: false }) };
+                    if (pais === "AR") flags.AR = true;
+                    if (pais === "UY") flags.UY = true;
+                    setModalData({ ...modalData, pais, paisesFlags: flags });
+                  }}
+                  className="w-full p-2 border border-gray-300 rounded"
+                >
+                  <option value="AR">AR</option>
+                  <option value="UY">UY</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold mb-2">Países habilitados</label>
+                <div className="flex items-center gap-4 text-sm">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={!!modalData.paisesFlags?.AR}
+                      onChange={() => {
+                        const current = modalData.paisesFlags || { AR: false, UY: false };
+                        const next = { ...current, AR: !current.AR };
+                        if (!next.AR && !next.UY) next[normalizePais(modalData.pais)] = true;
+                        if (normalizePais(modalData.pais) === "AR") next.AR = true;
+                        setModalData({ ...modalData, paisesFlags: next });
+                      }}
+                    />
+                    AR
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={!!modalData.paisesFlags?.UY}
+                      onChange={() => {
+                        const current = modalData.paisesFlags || { AR: false, UY: false };
+                        const next = { ...current, UY: !current.UY };
+                        if (!next.AR && !next.UY) next[normalizePais(modalData.pais)] = true;
+                        if (normalizePais(modalData.pais) === "UY") next.UY = true;
+                        setModalData({ ...modalData, paisesFlags: next });
+                      }}
+                    />
+                    UY
+                  </label>
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  Guardado como: {paisesFromFlags(modalData.paisesFlags, normalizePais(modalData.pais))}
+                </div>
+              </div>
+
+              <button
+                onClick={handleCreateUser}
+                disabled={loading}
+                className="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {loading && <Loader2 size={16} className="animate-spin" />}
+                Crear Usuario
               </button>
             </div>
           </div>

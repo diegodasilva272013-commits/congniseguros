@@ -540,14 +540,14 @@ export default function App() {
   const [introMuted, setIntroMuted] = useState(true);
   const [brandLogoOk, setBrandLogoOk] = useState(true);
 
-  const [rootView, setRootView] = useState("home"); // home | aseguradoras | clientes
+  const [rootView, setRootView] = useState("home"); // home | aseguradoras | enterprise | clientes | devadmin
 
   // Aseguradoras
   const [mode, setMode] = useState("auth"); // auth | dashboard
   const [authView, setAuthView] = useState("login"); // login | register
   const [authPais, setAuthPais] = useState("AR");
   // ✅ NUEVO: pagos
-  const [menu, setMenu] = useState("cartera"); // cartera | vencimientos | pagos | mensajes | config | marketing | redes | perfil
+  const [menu, setMenu] = useState("cartera"); // cartera | vencimientos | pagos | mensajes | config | marketing | perfil
 
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState({ message: "", type: "" });
@@ -589,6 +589,13 @@ export default function App() {
   const [asegAuthMode, setAsegAuthMode] = useState("email"); // email | invite
   const [inviteCode, setInviteCode] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
+
+  // ===== ENTERPRISE (Redes Sociales) =====
+  const [enterpriseMode, setEnterpriseMode] = useState("auth"); // auth | app
+  const [enterpriseEmailStep, setEnterpriseEmailStep] = useState(null);
+  const [enterpriseCodeDigits, setEnterpriseCodeDigits] = useState(["", "", "", "", "", ""]);
+  const [enterpriseUser, setEnterpriseUser] = useState(null);
+  const [enterpriseToken, setEnterpriseToken] = useState("");
 
   const getTrialDaysLeft = (trialExpiresAt) => {
     if (!trialExpiresAt) return null;
@@ -650,7 +657,7 @@ export default function App() {
   const [mkImgLoading, setMkImgLoading] = useState(false);
   const [mkImage, setMkImage] = useState("");
 
-  // Redes Sociales (IA)
+  // Redes Sociales (IA) - usado por Enterprise
   const [rsIdea, setRsIdea] = useState("");
   const [rsAvatar, setRsAvatar] = useState("auto"); // auto | vida | hogar | comercio
   const [rsScript, setRsScript] = useState("");
@@ -731,6 +738,119 @@ export default function App() {
       localStorage.removeItem("token");
     } catch {
       // ignore
+    }
+  };
+
+  const resetEnterpriseSession = () => {
+    setEnterpriseMode("auth");
+    setEnterpriseEmailStep(null);
+    setEnterpriseCodeDigits(["", "", "", "", "", ""]);
+    setEnterpriseUser(null);
+    setEnterpriseToken("");
+    setRsIdea("");
+    setRsAvatar("auto");
+    setRsScript("");
+    setRsLoading(false);
+    try {
+      localStorage.removeItem("enterprise_token");
+      localStorage.removeItem("enterprise_user");
+    } catch {
+      // ignore
+    }
+  };
+
+  const enterpriseSendCode = async ({ email }) => {
+    const e = String(email || "").trim();
+    if (!e || !e.includes("@")) return showMessage("Ingresá un email válido", "error");
+    setLoading(true);
+    try {
+      const res = await fetch("/enterprise/send-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: e }),
+      });
+      const raw = await res.text();
+      const data = raw ? JSON.parse(raw) : { status: "error", message: "Respuesta vacía del servidor" };
+      if (data.status === "success") {
+        setEnterpriseEmailStep(e);
+        setEnterpriseCodeDigits(["", "", "", "", "", ""]);
+        showMessage(data.message || "Si el email está habilitado, te enviamos un código.", "success");
+      } else {
+        showMessage(data.message || "No se pudo enviar el código", "error");
+      }
+    } catch (err) {
+      showMessage(err.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const enterpriseVerifyCode = async ({ email, otp }) => {
+    const e = String(email || "").trim();
+    const code = String(otp || "").replace(/[^\d]/g, "").trim();
+    if (!e || !e.includes("@")) return showMessage("Email inválido", "error");
+    if (code.length !== 6) return showMessage("Completa los 6 dígitos", "error");
+
+    setLoading(true);
+    try {
+      const res = await fetch("/enterprise/verify-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: e, otp: code }),
+      });
+      const raw = await res.text();
+      const data = raw ? JSON.parse(raw) : { status: "error", message: "Respuesta vacía del servidor" };
+      if (data.status !== "success") {
+        showMessage(data.message || "Código inválido", "error");
+        return;
+      }
+
+      const t = String(data.token || "");
+      const u = data.user || null;
+      setEnterpriseToken(t);
+      setEnterpriseUser(u);
+      setEnterpriseMode("app");
+      try {
+        localStorage.setItem("enterprise_token", t);
+        localStorage.setItem("enterprise_user", JSON.stringify(u || {}));
+      } catch {
+        // ignore
+      }
+      showMessage("Bienvenido/a", "success");
+    } catch (err) {
+      showMessage(err.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const enterpriseGenerateSocialScript = async () => {
+    const idea = String(rsIdea || "").trim();
+    if (!idea) return showMessage("Escribí una idea base para el guión.", "error");
+    if (!enterpriseToken) return showMessage("Iniciá sesión en Enterprise.", "error");
+
+    setRsLoading(true);
+    try {
+      const res = await fetch("/api/marketing/social-script", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${enterpriseToken}`,
+        },
+        body: JSON.stringify({ idea, avatar: rsAvatar }),
+      });
+      const raw = await res.text();
+      const data = raw ? JSON.parse(raw) : { status: "error", message: "Respuesta vacía del servidor" };
+      if (data.status !== "success") {
+        showMessage(data.message || "No se pudo generar el guión", "error");
+        return;
+      }
+      setRsScript(String(data.script || "").trim());
+      showMessage("Guión generado.", "success");
+    } catch (err) {
+      showMessage(err.message, "error");
+    } finally {
+      setRsLoading(false);
     }
   };
 
@@ -2630,6 +2750,38 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => {
+                // intento de reusar sesión si existe
+                try {
+                  const t = String(localStorage.getItem("enterprise_token") || "").trim();
+                  const uRaw = String(localStorage.getItem("enterprise_user") || "");
+                  const u = uRaw ? JSON.parse(uRaw) : null;
+                  if (t && u) {
+                    setEnterpriseToken(t);
+                    setEnterpriseUser(u);
+                    setEnterpriseMode("app");
+                  } else {
+                    setEnterpriseMode("auth");
+                  }
+                } catch {
+                  setEnterpriseMode("auth");
+                }
+                setEnterpriseEmailStep(null);
+                setEnterpriseCodeDigits(["", "", "", "", "", ""]);
+                setRootView("enterprise");
+              }}
+              className="p-8 rounded-3xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-left shadow-sm"
+            >
+              <div className="flex items-center gap-3">
+                <Share2 className="text-[var(--c2)]" />
+                <div className="text-xl font-black text-slate-900">Enterprise</div>
+              </div>
+              <div className="mt-2 text-sm text-slate-500">
+                Redes Sociales: guiones de influencer (Hook/Cuerpo/CTA) con login OTP.
+              </div>
+            </button>
+
+            <button
               onClick={() => setRootView("devadmin")}
               className="p-8 rounded-3xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-left shadow-sm"
             >
@@ -2653,6 +2805,213 @@ export default function App() {
             </button>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  /* ================== ENTERPRISE (REDES SOCIALES) ================== */
+  if (rootView === "enterprise") {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 font-sans">
+        {Toast}
+        <BackButton
+          show
+          onClick={() => {
+            setRootView("home");
+          }}
+          dark
+        />
+
+        {enterpriseMode === "auth" ? (
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-10 border border-slate-800">
+            <div className="text-center mb-8">
+              <Share2 className="mx-auto text-blue-600 mb-4" size={52} />
+              <h1 className="text-3xl font-black text-slate-900">Redes Sociales</h1>
+              <p className="text-slate-500 text-sm mt-1">Enterprise</p>
+            </div>
+
+            <div className="text-[11px] text-slate-500 mb-6">
+              Acceso por código (OTP) enviado al email habilitado. Sin contraseñas.
+            </div>
+
+            {!enterpriseEmailStep ? (
+              <div className="space-y-5">
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-700">Email</label>
+                  <input
+                    id="enterpriseEmailInput"
+                    type="email"
+                    className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl outline-none"
+                    placeholder="tu@email.com"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const email = document.getElementById("enterpriseEmailInput")?.value;
+                    enterpriseSendCode({ email });
+                  }}
+                  disabled={loading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-2xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-60"
+                >
+                  {loading ? <Loader2 className="animate-spin" /> : <Send size={18} />}
+                  Enviar código
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                <div className="text-center">
+                  <p className="text-sm font-black text-slate-700">Ingresa el código de {enterpriseEmailStep}</p>
+                </div>
+
+                <div className="flex gap-2 justify-center">
+                  {enterpriseCodeDigits.map((digit, idx) => (
+                    <input
+                      key={idx}
+                      id={`enterprise-digit-${idx}`}
+                      type="text"
+                      maxLength="1"
+                      value={digit}
+                      onChange={(e) => {
+                        const v = String(e.target.value || "").slice(0, 1);
+                        const next = [...enterpriseCodeDigits];
+                        next[idx] = v;
+                        setEnterpriseCodeDigits(next);
+                        if (v && idx < 5) {
+                          document.getElementById(`enterprise-digit-${idx + 1}`)?.focus();
+                        }
+                      }}
+                      className="w-12 h-12 px-0 py-0 bg-white border-2 border-slate-300 rounded-xl outline-none text-center text-lg font-black text-slate-900"
+                    />
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const code = enterpriseCodeDigits.join("");
+                    enterpriseVerifyCode({ email: enterpriseEmailStep, otp: code });
+                  }}
+                  disabled={loading || enterpriseCodeDigits.join("").length !== 6}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-2xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-60"
+                >
+                  {loading ? <Loader2 className="animate-spin" /> : <Shield size={18} />}
+                  Verificar
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEnterpriseEmailStep(null);
+                    setEnterpriseCodeDigits(["", "", "", "", "", ""]);
+                  }}
+                  className="w-full bg-slate-200 hover:bg-slate-300 text-slate-700 font-black py-2 rounded-2xl text-sm"
+                >
+                  Cambiar email
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-5xl p-0 border border-slate-800 overflow-hidden">
+            <div className="p-6 border-b border-slate-200 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xl font-black text-slate-900 flex items-center gap-2">
+                  <Share2 size={18} /> Redes Sociales — Enterprise
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  {enterpriseUser?.email ? `Sesión: ${enterpriseUser.email}` : ""}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={openSupport}
+                  className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-black flex items-center gap-2"
+                >
+                  <MessageCircle size={16} /> Soporte
+                </button>
+                <button
+                  type="button"
+                  onClick={resetEnterpriseSession}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black flex items-center gap-2"
+                >
+                  <LogOut size={16} /> Salir
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="border border-slate-200 rounded-3xl p-5">
+                <div className="font-black text-slate-900 mb-2">Idea base</div>
+                <textarea
+                  value={rsIdea}
+                  onChange={(e) => setRsIdea(e.target.value)}
+                  placeholder="Ej: Seguro de auto para jóvenes, asistencia 24/7 y descuento por buen conductor..."
+                  className="w-full h-40 px-4 py-3 border border-slate-300 rounded-2xl outline-none resize-none"
+                />
+
+                <div className="mt-4">
+                  <div className="font-black text-slate-900 mb-2">Avatar</div>
+                  <div className="flex flex-wrap gap-2">
+                    {["auto", "vida", "hogar", "comercio"].map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => setRsAvatar(k)}
+                        className={
+                          "px-4 py-2 rounded-2xl text-xs font-black border " +
+                          (rsAvatar === k
+                            ? "bg-blue-600 text-white border-blue-700"
+                            : "bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-200")
+                        }
+                      >
+                        {k.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={enterpriseGenerateSocialScript}
+                    disabled={rsLoading}
+                    className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black hover:bg-blue-700 flex items-center gap-2 disabled:opacity-60"
+                  >
+                    {rsLoading ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
+                    Generar guión
+                  </button>
+                </div>
+              </div>
+
+              <div className="border border-slate-200 rounded-3xl p-5">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-black text-slate-900">Guión final</div>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(rsScript)}
+                    className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-black flex items-center gap-2"
+                    disabled={!String(rsScript || "").trim()}
+                  >
+                    <Copy size={14} /> Copiar
+                  </button>
+                </div>
+
+                <textarea
+                  value={rsScript}
+                  onChange={(e) => setRsScript(e.target.value)}
+                  placeholder="Acá aparece el guión (HOOK / CUERPO / CTA)..."
+                  className="w-full h-56 px-4 py-3 border border-slate-300 rounded-2xl outline-none resize-none"
+                />
+
+                <div className="mt-3 text-[11px] text-slate-500">Tip: podés editar el texto antes de copiar.</div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -3552,12 +3911,6 @@ export default function App() {
               icon={<Sparkles size={16} />}
               label="Marketing IA"
               onClick={() => setMenu("marketing")}
-            />
-            <MenuBtn
-              active={menu === "redes"}
-              icon={<Share2 size={16} />}
-              label="Redes Sociales"
-              onClick={() => setMenu("redes")}
             />
             <MenuBtn
               active={menu === "perfil"}
@@ -4502,95 +4855,6 @@ export default function App() {
             </div>
           )}
 
-          {/* REDES SOCIALES */}
-          {menu === "redes" && (
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-6 border-b border-slate-200 flex items-center justify-between">
-                <div>
-                  <div className="text-xl font-black text-slate-900 flex items-center gap-2">
-                    <Share2 size={18} /> Redes Sociales
-                  </div>
-                  <div className="text-sm text-slate-500">Guión de influencer (Hook/Cuerpo/CTA) — máximo 1 minuto.</div>
-                </div>
-                <button
-                  onClick={openSupport}
-                  className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-black flex items-center gap-2"
-                >
-                  <MessageCircle size={16} /> Soporte
-                </button>
-              </div>
-
-              <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="border border-slate-200 rounded-3xl p-5">
-                  <div className="font-black text-slate-900 mb-2">Idea base</div>
-                  <textarea
-                    value={rsIdea}
-                    onChange={(e) => setRsIdea(e.target.value)}
-                    placeholder="Ej: Seguro de auto para jóvenes, asistencia 24/7 y descuento por buen conductor..."
-                    className="w-full h-40 px-4 py-3 border border-slate-300 rounded-2xl outline-none resize-none"
-                  />
-
-                  <div className="mt-4">
-                    <div className="font-black text-slate-900 mb-2">Avatar</div>
-                    <div className="flex flex-wrap gap-2">
-                      {["auto", "vida", "hogar", "comercio"].map((k) => (
-                        <button
-                          key={k}
-                          type="button"
-                          onClick={() => setRsAvatar(k)}
-                          className={
-                            "px-4 py-2 rounded-2xl text-xs font-black border " +
-                            (rsAvatar === k
-                              ? "bg-blue-600 text-white border-blue-700"
-                              : "bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-200")
-                          }
-                        >
-                          {k.toUpperCase()}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={generateSocialScript}
-                      disabled={rsLoading}
-                      className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black hover:bg-blue-700 flex items-center gap-2 disabled:opacity-60"
-                    >
-                      {rsLoading ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
-                      Generar guión
-                    </button>
-                  </div>
-                </div>
-
-                <div className="border border-slate-200 rounded-3xl p-5">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="font-black text-slate-900">Guión final</div>
-                    <button
-                      type="button"
-                      onClick={() => copyToClipboard(rsScript)}
-                      className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-black flex items-center gap-2"
-                      disabled={!String(rsScript || "").trim()}
-                    >
-                      <Copy size={14} /> Copiar
-                    </button>
-                  </div>
-
-                  <textarea
-                    value={rsScript}
-                    onChange={(e) => setRsScript(e.target.value)}
-                    placeholder="Acá aparece el guión (HOOK / CUERPO / CTA)..."
-                    className="w-full h-56 px-4 py-3 border border-slate-300 rounded-2xl outline-none resize-none"
-                  />
-
-                  <div className="mt-3 text-[11px] text-slate-500">
-                    Tip: podés editar el texto antes de copiar.
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
         </main>
 
         {/* MODAL ABM CLIENTE */}

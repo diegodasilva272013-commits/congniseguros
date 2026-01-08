@@ -226,6 +226,73 @@ const getAuthUserIdFromReq = (req) => {
   }
 };
 
+const getDecodedAuthFromReq = (req) => {
+  const token = req.headers.authorization?.split(" ")?.[1];
+  if (!token || token === "null" || token === "undefined") return null;
+  try {
+    return jwt.verify(token, jwtSecret);
+  } catch {
+    return null;
+  }
+};
+
+const requireEnterpriseAuth = (req, res, next) => {
+  const decoded = getDecodedAuthFromReq(req);
+  if (!decoded) return res.status(401).json({ status: "error", message: "No autorizado" });
+  if (!decoded.enterprise) return res.status(403).json({ status: "error", message: "No autorizado" });
+  req.enterpriseAuth = decoded;
+  return next();
+};
+
+const isEnterpriseAllowedByEmail = async (emailRaw) => {
+  if (!dbConnected) return { allowed: false, reason: "db_not_connected" };
+  const emailNorm = normalizeEmailLower(emailRaw);
+  if (!emailNorm || !emailNorm.includes("@")) return { allowed: false, reason: "invalid_email" };
+
+  // Enterprise: permitir si
+  // - rol=admin
+  // - o suscripción ACTIVA al plan ENTERPRISE (y no vencida)
+  try {
+    const r = await pool.query(
+      `
+      SELECT
+        u.id,
+        u.email,
+        u.rol,
+        s.estado AS suscripcion_estado,
+        s.fecha_fin AS suscripcion_fecha_fin,
+        p.nombre AS plan_nombre
+      FROM usuarios u
+      LEFT JOIN suscripciones s ON s.aseguradora_id = u.id
+      LEFT JOIN planes p ON p.id = s.plan_id
+      WHERE LOWER(u.email) = LOWER($1)
+      LIMIT 1
+      `,
+      [emailNorm]
+    );
+
+    const row = r.rows?.[0];
+    if (!row) return { allowed: false, reason: "not_found" };
+    const rol = String(row.rol || "").toLowerCase();
+    if (rol === "admin" || rol === "enterprise") {
+      return { allowed: true, reason: rol, userId: row.id, email: row.email };
+    }
+
+    const plan = String(row.plan_nombre || "").toUpperCase();
+    const estado = String(row.suscripcion_estado || "").toUpperCase();
+    const fin = row.suscripcion_fecha_fin ? new Date(row.suscripcion_fecha_fin) : null;
+    const finOk =
+      !fin || (fin instanceof Date && !isNaN(fin.getTime()) && fin.getTime() >= Date.now() - 24 * 60 * 60 * 1000);
+
+    if (plan === "ENTERPRISE" && estado === "ACTIVA" && finOk) {
+      return { allowed: true, reason: "plan_enterprise", userId: row.id, email: row.email };
+    }
+    return { allowed: false, reason: "not_allowed" };
+  } catch {
+    return { allowed: false, reason: "query_failed" };
+  }
+};
+
 const getBlockedUserMessage = (reason) => {
   const r = String(reason || "").trim().toUpperCase();
   if (r === "TRIAL_EXPIRED") return "Tu prueba gratuita venció. Contactá a soporte para continuar.";
@@ -3418,7 +3485,7 @@ app.post("/api/marketing/image", async (req, res) => {
 });
 
 // ===== OPENAI: REDES SOCIALES (GUIÓN) =====
-app.post("/api/marketing/social-script", async (req, res) => {
+app.post("/api/marketing/social-script", requireEnterpriseAuth, async (req, res) => {
   try {
     const { idea, avatar } = req.body;
     const baseIdea = String(idea || "").trim();
@@ -3728,6 +3795,144 @@ app.post("/api/admin/usuarios/crear-trial", async (req, res) => {
       return res.status(400).json({ status: "error", message: "Email ya registrado" });
     }
     res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== ADMIN: CREAR/ACTUALIZAR USUARIO + LICENCIA (SIN CONTRASEÑAS) =====
+app.post("/api/admin/usuarios/crear", async (req, res) => {
+  try {
+    const admin = await requireAdminAccess(req);
+    if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
+
+    const emailRaw = String(req.body?.email || "").trim().toLowerCase();
+    const nombre = String(req.body?.nombre || "").trim() || "Aseguradora";
+    const planIdRaw = Number(req.body?.plan_id);
+    const plan_id = Number.isFinite(planIdRaw) && planIdRaw > 0 ? Math.floor(planIdRaw) : 0;
+
+    if (!emailRaw || !emailRaw.includes("@")) {
+      return res.status(400).json({ status: "error", message: "Email inválido" });
+    }
+    if (!plan_id) {
+      return res.status(400).json({ status: "error", message: "plan_id requerido" });
+    }
+
+    const paisNorm = normalizePais(req.body?.pais);
+    const paisesNorm = normalizePaisList(req.body?.paises, paisNorm);
+    const rolRaw = String(req.body?.rol || "aseguradora").trim().toLowerCase();
+    const rol = rolRaw || "aseguradora";
+
+    // Trial opcional: si plan es FREE, default 2 días.
+    const diasTrialRaw = Number(req.body?.dias_trial);
+    const dias_trial = Number.isFinite(diasTrialRaw) && diasTrialRaw >= 0 ? Math.min(30, Math.floor(diasTrialRaw)) : null;
+
+    await ensureUsuariosPaisSchema();
+    await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_started_at TIMESTAMPTZ").catch(() => {});
+    await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMPTZ").catch(() => {});
+    await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ").catch(() => {});
+    await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS blocked_reason TEXT").catch(() => {});
+
+    const now = new Date();
+    const shouldTrial = Number(plan_id) === 1;
+    const trialDaysFinal = shouldTrial ? (dias_trial ?? 2) : null;
+    const trialStartedAt = shouldTrial && trialDaysFinal && trialDaysFinal > 0 ? now : null;
+    const trialExpiresAt =
+      shouldTrial && trialDaysFinal && trialDaysFinal > 0
+        ? new Date(Date.now() + trialDaysFinal * 24 * 60 * 60 * 1000)
+        : null;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const existing = await client.query(
+        "SELECT id FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1",
+        [emailRaw]
+      );
+      const exists = existing.rows?.[0]?.id;
+
+      let userRow;
+
+      if (!exists) {
+        // Password placeholder (NO SE USA): requerido por schema legacy (password NOT NULL).
+        const placeholder = crypto.randomBytes(18).toString("hex");
+        const hashedPassword = await bcrypt.hash(placeholder, 12);
+
+        const inserted = await client.query(
+          `INSERT INTO usuarios (nombre, email, password, rol, pais, paises, trial_started_at, trial_expires_at, blocked_at, blocked_reason)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)
+           RETURNING id, nombre, email, rol, pais, paises, trial_started_at, trial_expires_at, blocked_at, blocked_reason`,
+          [nombre, emailRaw, hashedPassword, rol, paisNorm, paisesNorm, trialStartedAt, trialExpiresAt]
+        );
+        userRow = inserted.rows[0];
+      } else {
+        const updated = await client.query(
+          `UPDATE usuarios
+           SET nombre = $1,
+               rol = $2,
+               pais = $3,
+               paises = $4,
+               trial_started_at = $5,
+               trial_expires_at = $6,
+               blocked_at = NULL,
+               blocked_reason = NULL
+           WHERE id = $7
+           RETURNING id, nombre, email, rol, pais, paises, trial_started_at, trial_expires_at, blocked_at, blocked_reason`,
+          [nombre, rol, paisNorm, paisesNorm, trialStartedAt, trialExpiresAt, exists]
+        );
+        userRow = updated.rows[0];
+      }
+
+      // Suscripción / licencia
+      try {
+        const fechaInicio = now;
+        const fechaFin = shouldTrial ? trialExpiresAt : null;
+        const proximoPago = shouldTrial ? trialExpiresAt : null;
+
+        await client.query(
+          `INSERT INTO suscripciones (aseguradora_id, plan_id, estado, fecha_inicio, fecha_fin, fecha_proximo_pago)
+           VALUES ($1, $2, 'ACTIVA', $3, $4, $5)
+           ON CONFLICT (aseguradora_id) DO UPDATE SET
+             plan_id = EXCLUDED.plan_id,
+             estado = EXCLUDED.estado,
+             fecha_inicio = EXCLUDED.fecha_inicio,
+             fecha_fin = EXCLUDED.fecha_fin,
+             fecha_proximo_pago = EXCLUDED.fecha_proximo_pago`,
+          [userRow.id, plan_id, fechaInicio, fechaFin, proximoPago]
+        );
+      } catch {
+        // compat: si no existe suscripciones/planes, no bloquear alta de usuario
+      }
+
+      await client.query("COMMIT");
+
+      await logAudit(admin.usuario_id, "ADMIN_CREATE_USER", "usuarios", {
+        email: emailRaw,
+        plan_id,
+        rol,
+        pais: paisNorm,
+        paises: paisesNorm,
+        trial_days: trialDaysFinal,
+      });
+
+      return res.json({
+        status: "success",
+        data: {
+          user: userRow,
+          plan_id,
+          trial_days: trialDaysFinal,
+        },
+      });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    if (err.code === "23505") {
+      return res.status(400).json({ status: "error", message: "Email ya registrado" });
+    }
+    return res.status(500).json({ status: "error", message: err.message });
   }
 });
 
@@ -4087,6 +4292,64 @@ app.post("/auth/otp/verify", async (req, res) => {
         blocked_reason: userData.blocked_reason || null,
         profile_photo_dataurl: getProfilePhotoDataUrlFromUserRow(userData),
       },
+      token,
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== ENTERPRISE: AUTH OTP (sin contraseñas, sin enumeración) =====
+app.post("/enterprise/send-code", async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    const emailRaw = String(email || "").trim();
+    if (!emailRaw) return res.status(400).json({ status: "error", message: "Email requerido" });
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    // No enumerar: SIEMPRE responder success.
+    const allow = await isEnterpriseAllowedByEmail(emailRaw);
+    if (allow.allowed) {
+      const purpose = `enterprise_login:${normalizeEmailLower(emailRaw)}`;
+      await createEmailCodeAndSend({ email: emailRaw, purpose });
+    }
+
+    return res.json({ status: "success", message: "Si el email está habilitado, te enviamos un código." });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/enterprise/verify-code", async (req, res) => {
+  try {
+    const { email, otp } = req.body || {};
+    const emailRaw = String(email || "").trim();
+    const otpRaw = String(otp || "").trim();
+    if (!emailRaw || !otpRaw) {
+      return res.status(400).json({ status: "error", message: "Email y código requeridos" });
+    }
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    const purpose = `enterprise_login:${normalizeEmailLower(emailRaw)}`;
+    const v = await verifyEmailCodeByPurpose({ purpose, code: otpRaw });
+    if (!v?.valid) {
+      return res.status(401).json({ status: "error", message: v?.message || "Código inválido" });
+    }
+
+    const allow = await isEnterpriseAllowedByEmail(emailRaw);
+    if (!allow.allowed || !allow.userId) {
+      return res.status(403).json({ status: "error", message: "No autorizado" });
+    }
+
+    const token = jwt.sign(
+      { enterprise: true, usuario_id: allow.userId, email: allow.email || emailRaw },
+      jwtSecret,
+      { expiresIn: "7d" }
+    );
+
+    return res.json({
+      status: "success",
+      user: { id: allow.userId, email: allow.email || emailRaw },
       token,
     });
   } catch (err) {
