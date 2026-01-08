@@ -348,6 +348,15 @@ const getPagoStatus = (c) => {
       return "VENCIDA";
   }
 
+  // Compat: la tabla tenant usa `cuota_paga` (SI/NO)
+  const cuotaPagaRaw = c?.cuota_paga;
+  if (cuotaPagaRaw !== undefined && cuotaPagaRaw !== null) {
+    const s = String(cuotaPagaRaw).toLowerCase().trim();
+    if (!s) return "SIN_DATO";
+    if (["si", "sí", "s", "1", "true", "pagado", "pago", "paga"].includes(s)) return "AL_DIA";
+    if (["no", "n", "0", "false", "vencida", "vencido", "impago", "moroso"].includes(s)) return "VENCIDA";
+  }
+
   return "SIN_DATO";
 };
 
