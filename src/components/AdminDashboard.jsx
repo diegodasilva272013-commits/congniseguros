@@ -408,7 +408,7 @@ export default function AdminDashboard() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ create_db: false }),
       });
       const result = await res.json();
       if (result.status !== "success") {
@@ -418,7 +418,13 @@ export default function AdminDashboard() {
 
       const ok = result?.data?.ok ?? 0;
       const fail = result?.data?.fail ?? 0;
-      alert(`Migración WhatsApp Inbox finalizada. OK=${ok} FAIL=${fail}`);
+      const failed = Array.isArray(result?.data?.results) ? result.data.results.filter((x) => !x?.ok) : [];
+      const preview = failed
+        .slice(0, 3)
+        .map((x) => `${x.tenant_db || "?"} (${x.code || "ERR"}) ${x.message || ""}`)
+        .join("\n");
+      const extra = fail > 0 ? `\n\nFallos (primeros ${Math.min(3, failed.length)}):\n${preview}` : "";
+      alert(`Migración WhatsApp Inbox finalizada. OK=${ok} FAIL=${fail}${extra}`);
     } catch (err) {
       alert("Error: " + (err?.message || String(err)));
     } finally {

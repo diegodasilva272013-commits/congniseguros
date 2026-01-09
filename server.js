@@ -4926,6 +4926,8 @@ app.post("/api/admin/migrate/whatsapp-inbox", async (req, res) => {
     const admin = await requireAdminAccess(req);
     if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
 
+    const createDbIfMissing = !!req.body?.create_db;
+
     // asegurar columna tenant_db
     await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS tenant_db TEXT").catch(() => {});
 
@@ -4948,11 +4950,33 @@ app.post("/api/admin/migrate/whatsapp-inbox", async (req, res) => {
       }
 
       try {
-        // 1) crear DB + aplicar tenant-schema.sql (si hay permisos)
-        await ensureTenantDbExists(tenantDb);
+        // 1) Migrar solo DBs existentes (por defecto). Opción: create_db=true.
+        const exists = await adminPool.query("SELECT 1 FROM pg_database WHERE datname = $1", [tenantDb]);
+        if (exists.rows.length === 0) {
+          if (!createDbIfMissing) {
+            results.push({
+              user_id: userId,
+              tenant_db: tenantDb,
+              ok: false,
+              code: "DB_NOT_FOUND",
+              message: "Tenant DB no existe (no se crea automáticamente)",
+            });
+            continue;
+          }
+          // si se pide explícitamente, intentamos crear DB + schema base
+          await ensureTenantDbExists(tenantDb);
+        }
 
         // 2) asegurar schema evolutivo (idempotente)
         const tenantPool = getOrCreateTenantPoolByDbName(tenantDb);
+
+        // Si la DB existía pero faltaba el schema base, lo intentamos aplicar.
+        try {
+          await tenantPool.query("SELECT 1 FROM clientes LIMIT 1");
+        } catch {
+          const schemaSql = loadTenantSchemaSql();
+          await tenantPool.query(schemaSql);
+        }
 
         // clientes.pais (no rompe si ya existe)
         await ensureTenantClientesPaisSchema(tenantPool);
