@@ -1438,7 +1438,29 @@ const resolveAseguradoraIdFromPhoneNumberId = async (phoneNumberId) => {
   try {
     const r = await pool.query("SELECT id FROM usuarios WHERE wpp_phone_number_id = $1 LIMIT 1", [phoneId]);
     const id = r.rows?.[0]?.id;
-    return id != null ? Number(id) : null;
+    if (id != null) return Number(id);
+
+    // Fallback: buscar en configuracion (master) si el mapeo no fue persistido en usuarios.
+    // Esto pasa cuando se guardó la config pero falló el UPDATE de usuarios o la DB venía vieja.
+    try {
+      const c = await pool.query(
+        "SELECT scope_id FROM configuracion WHERE key = 'wpp_phone_number_id' AND scope = 'ASEGURADORA' AND value = $1 AND scope_id IS NOT NULL ORDER BY scope_id DESC NULLS LAST LIMIT 1",
+        [phoneId]
+      );
+      const scopeId = safeTrim(c.rows?.[0]?.scope_id || "");
+      const parsed = Number(scopeId);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        // self-heal: persistir para que la próxima resolución sea O(1)
+        await pool
+          .query("UPDATE usuarios SET wpp_phone_number_id = $1 WHERE id = $2 AND (wpp_phone_number_id IS NULL OR TRIM(wpp_phone_number_id) = '')", [phoneId, parsed])
+          .catch(() => {});
+        return parsed;
+      }
+    } catch {
+      // ignore
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -5073,6 +5095,31 @@ app.post("/api/admin/migrate/whatsapp-inbox", async (req, res) => {
         ok: okCount,
         fail: failCount,
         results,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== ADMIN: WHATSAPP DEBUG (webhook hits / send attempts) =====
+app.get("/api/admin/whatsapp/debug", async (req, res) => {
+  try {
+    const admin = await requireAdminAccess(req);
+    if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
+
+    const hits = Array.isArray(wppDebug.webhookHits) ? wppDebug.webhookHits : [];
+    const sends = Array.isArray(wppDebug.sendAttempts) ? wppDebug.sendAttempts : [];
+
+    return res.json({
+      status: "success",
+      data: {
+        webhook_hits: hits.slice(-80),
+        send_attempts: sends.slice(-80),
+        config: {
+          has_verify_token: !!safeTrim(process.env.WHATSAPP_VERIFY_TOKEN || ""),
+          has_meta_app_secret: !!safeTrim(process.env.META_APP_SECRET || ""),
+        },
       },
     });
   } catch (err) {
