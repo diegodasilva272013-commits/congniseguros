@@ -984,6 +984,37 @@ const ensureTenantWhatsAppInboxSchema = async (tenantPool) => {
     await tenantPool.query(
       "CREATE INDEX IF NOT EXISTS ix_whatsapp_messages_conversation_created_at ON whatsapp_messages(conversation_id, created_at)"
     );
+
+    // ===== Evolución MVP (idempotente) =====
+    // Conversaciones: estados, intent, timestamps, asignación, métricas
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'PENDIENTE'");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS intent TEXT DEFAULT 'general'");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ DEFAULT NOW()");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS last_inbound_at TIMESTAMPTZ");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS last_outbound_at TIMESTAMPTZ");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS last_actor TEXT DEFAULT 'cliente'");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS assigned_to TEXT");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS requires_template BOOLEAN DEFAULT FALSE");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS resolution_type TEXT");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS reopened_count INT DEFAULT 0");
+    await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS waba_phone_number_id TEXT");
+
+    await tenantPool.query(
+      "CREATE INDEX IF NOT EXISTS ix_whatsapp_conversations_status_last_inbound ON whatsapp_conversations(status, last_inbound_at DESC NULLS LAST)"
+    );
+    await tenantPool.query(
+      "CREATE INDEX IF NOT EXISTS ix_whatsapp_conversations_intent_last_inbound ON whatsapp_conversations(intent, last_inbound_at DESC NULLS LAST)"
+    );
+
+    // Mensajes: actor, tipo, metadata, delivery
+    await tenantPool.query("ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS actor TEXT DEFAULT 'cliente'");
+    await tenantPool.query("ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'text'");
+    await tenantPool.query("ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS content_meta JSONB");
+    await tenantPool.query("ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS delivery_status TEXT");
+    await tenantPool.query(
+      "CREATE INDEX IF NOT EXISTS ix_whatsapp_messages_conversation_created_at_desc ON whatsapp_messages(conversation_id, created_at DESC)"
+    );
   } catch (err) {
     console.log("⚠️ No se pudo asegurar schema WhatsApp inbox:", err?.message || err);
   }
@@ -1439,7 +1470,7 @@ const pushWppDebug = (key, item, max = 80) => {
   }
 };
 
-const sendWhatsAppText = async (req, { aseguradora_id, to, message }) => {
+const sendWhatsAppText = async (req, { aseguradora_id, to, message, actor, type, deliveryStatus }) => {
   const toNorm = safeTrim(to);
   const msgNorm = safeTrim(message);
   if (!aseguradora_id || !toNorm || !msgNorm) {
@@ -1529,6 +1560,10 @@ const sendWhatsAppText = async (req, { aseguradora_id, to, message }) => {
       toPhone: waContact,
       body: String(msgNorm).slice(0, 4000),
       waTimestamp: null,
+      actor: String(actor || "humano"),
+      type: String(type || "text"),
+      deliveryStatus: deliveryStatus ? String(deliveryStatus) : null,
+      wabaPhoneNumberId: String(phoneId || ""),
     });
     if (saved?.message) {
       wppBroadcast(Number(aseguradora_id), {
@@ -2951,7 +2986,23 @@ const resolveWhatsAppCredentialsForReq = async (req) => {
 
 const upsertWppConversationAndInsertMessage = async (
   tenantPool,
-  { waContact, phone, name, direction, waMessageId, fromPhone, toPhone, body, waTimestamp }
+  {
+    waContact,
+    phone,
+    name,
+    direction,
+    waMessageId,
+    fromPhone,
+    toPhone,
+    body,
+    waTimestamp,
+    actor,
+    type,
+    contentMeta,
+    deliveryStatus,
+    intent,
+    wabaPhoneNumberId,
+  }
 ) => {
   const safeWa = String(waContact || "").trim();
   if (!safeWa) return null;
@@ -2959,6 +3010,12 @@ const upsertWppConversationAndInsertMessage = async (
   const safePhone = String(phone || safeWa).trim();
   const safeName = String(name || "").trim();
   const safeBody = String(body || "").trim();
+
+  const safeDirection = direction === "out" ? "out" : "in";
+  const safeActor = String(actor || (safeDirection === "out" ? "humano" : "cliente")).trim() || "cliente";
+  const safeType = String(type || "text").trim() || "text";
+  const safeIntent = String(intent || "").trim();
+  const safeWaba = String(wabaPhoneNumberId || "").trim();
 
   const c = await tenantPool.query(
     `INSERT INTO whatsapp_conversations (wa_contact, phone, name, last_message_at)
@@ -2974,22 +3031,82 @@ const upsertWppConversationAndInsertMessage = async (
   const conversation = c.rows[0];
   if (!conversation?.id) return null;
 
+  // Evolución conversacional (si las columnas existen, las actualiza; si no, no rompe)
+  try {
+    await tenantPool.query(
+      `UPDATE whatsapp_conversations
+       SET
+         opened_at = COALESCE(opened_at, created_at, NOW()),
+         last_inbound_at = CASE WHEN $2 = 'in' THEN NOW() ELSE last_inbound_at END,
+         last_outbound_at = CASE WHEN $2 = 'out' THEN NOW() ELSE last_outbound_at END,
+         last_actor = $3,
+         intent = CASE WHEN NULLIF($4,'') IS NOT NULL THEN $4 ELSE COALESCE(intent,'general') END,
+         waba_phone_number_id = CASE WHEN NULLIF($5,'') IS NOT NULL THEN $5 ELSE waba_phone_number_id END,
+         reopened_count = CASE WHEN $2 = 'in' AND COALESCE(status,'') = 'RESUELTA' THEN COALESCE(reopened_count,0) + 1 ELSE COALESCE(reopened_count,0) END,
+         status = CASE
+           WHEN $2 = 'in' AND COALESCE(status,'') = 'RESUELTA' THEN 'REABIERTA'
+           WHEN $2 = 'in' AND (status IS NULL OR TRIM(status) = '') THEN 'PENDIENTE'
+           WHEN $2 = 'out' AND COALESCE(status,'') IN ('PENDIENTE','REABIERTA') THEN 'ATENDIENDO'
+           WHEN $2 = 'out' AND (status IS NULL OR TRIM(status) = '') THEN 'ATENDIENDO'
+           ELSE status
+         END,
+         requires_template = CASE
+           WHEN $2 = 'in' THEN FALSE
+           WHEN last_inbound_at IS NULL THEN FALSE
+           WHEN NOW() - last_inbound_at > INTERVAL '24 hours' THEN TRUE
+           ELSE FALSE
+         END,
+         updated_at = NOW()
+       WHERE id = $1`,
+      [Number(conversation.id), safeDirection, safeActor, safeIntent, safeWaba]
+    );
+  } catch {
+    // ignore
+  }
+
   // Insert message (dedupe by wa_message_id if present)
-  const m = await tenantPool.query(
-    `INSERT INTO whatsapp_messages (conversation_id, direction, wa_message_id, from_phone, to_phone, body, wa_timestamp)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (wa_message_id) DO NOTHING
-     RETURNING *`,
-    [
-      Number(conversation.id),
-      direction,
-      waMessageId ? String(waMessageId) : null,
-      String(fromPhone || "").trim(),
-      String(toPhone || "").trim(),
-      safeBody,
-      waTimestamp ? Number(waTimestamp) : null,
-    ]
-  );
+  let m;
+  try {
+    m = await tenantPool.query(
+      `INSERT INTO whatsapp_messages (
+         conversation_id, direction, wa_message_id, from_phone, to_phone, body, wa_timestamp,
+         actor, type, content_meta, delivery_status
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+       ON CONFLICT (wa_message_id) DO NOTHING
+       RETURNING *`,
+      [
+        Number(conversation.id),
+        safeDirection,
+        waMessageId ? String(waMessageId) : null,
+        String(fromPhone || "").trim(),
+        String(toPhone || "").trim(),
+        safeBody,
+        waTimestamp ? Number(waTimestamp) : null,
+        safeActor,
+        safeType,
+        contentMeta != null ? JSON.stringify(contentMeta) : null,
+        deliveryStatus ? String(deliveryStatus) : null,
+      ]
+    );
+  } catch {
+    // Fallback compat (tenants viejos)
+    m = await tenantPool.query(
+      `INSERT INTO whatsapp_messages (conversation_id, direction, wa_message_id, from_phone, to_phone, body, wa_timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (wa_message_id) DO NOTHING
+       RETURNING *`,
+      [
+        Number(conversation.id),
+        safeDirection,
+        waMessageId ? String(waMessageId) : null,
+        String(fromPhone || "").trim(),
+        String(toPhone || "").trim(),
+        safeBody,
+        waTimestamp ? Number(waTimestamp) : null,
+      ]
+    );
+  }
 
   return { conversation, message: m.rows[0] || null };
 };
@@ -3331,6 +3448,8 @@ app.post("/api/whatsapp/conversations/list", async (req, res) => {
     const tenantPool = await getTenantPoolFromReq(req);
     const r = await tenantPool.query(
       `SELECT c.id, c.wa_contact, c.phone, c.name, c.last_message_at,
+              c.status, c.intent, c.opened_at, c.last_inbound_at, c.last_outbound_at, c.closed_at,
+              c.last_actor, c.assigned_to, c.requires_template, c.resolution_type, c.reopened_count,
               m.body AS last_body, m.direction AS last_direction, m.created_at AS last_created_at
        FROM whatsapp_conversations c
        LEFT JOIN LATERAL (
@@ -3357,7 +3476,8 @@ app.post("/api/whatsapp/messages/list", async (req, res) => {
       return res.status(400).json({ status: "error", message: "conversation_id requerido" });
     }
     const r = await tenantPool.query(
-      `SELECT id, conversation_id, direction, from_phone, to_phone, body, created_at
+      `SELECT id, conversation_id, direction, from_phone, to_phone, body, created_at,
+              actor, type, delivery_status
        FROM whatsapp_messages
        WHERE conversation_id = $1
        ORDER BY created_at ASC
@@ -3367,6 +3487,140 @@ app.post("/api/whatsapp/messages/list", async (req, res) => {
     res.json({ status: "success", data: r.rows || [] });
   } catch (err) {
     res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== WHATSAPP INBOX: SET STATUS/INTENT (MVP) =====
+app.post("/api/whatsapp/conversations/set-status", async (req, res) => {
+  try {
+    const tenantPool = await getTenantPoolFromReq(req);
+    const conversationId = Number(req.body?.conversation_id);
+    const status = String(req.body?.status || "").trim().toUpperCase();
+
+    if (!Number.isFinite(conversationId)) {
+      return res.status(400).json({ status: "error", message: "conversation_id requerido" });
+    }
+    const allowed = new Set(["PENDIENTE", "ATENDIENDO", "EN_ESPERA", "RESUELTA", "REABIERTA"]);
+    if (!allowed.has(status)) {
+      return res.status(400).json({ status: "error", message: "status inválido" });
+    }
+
+    const r = await tenantPool.query(
+      `UPDATE whatsapp_conversations
+       SET
+         status = $2,
+         closed_at = CASE WHEN $2 = 'RESUELTA' THEN NOW() ELSE NULL END,
+         updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [conversationId, status]
+    );
+
+    return res.json({ status: "success", data: r.rows?.[0] || null });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/whatsapp/conversations/set-intent", async (req, res) => {
+  try {
+    const tenantPool = await getTenantPoolFromReq(req);
+    const conversationId = Number(req.body?.conversation_id);
+    const intent = String(req.body?.intent || "").trim().toLowerCase();
+    if (!Number.isFinite(conversationId)) {
+      return res.status(400).json({ status: "error", message: "conversation_id requerido" });
+    }
+    if (!intent) {
+      return res.status(400).json({ status: "error", message: "intent requerido" });
+    }
+    const r = await tenantPool.query(
+      `UPDATE whatsapp_conversations
+       SET intent = $2, updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [conversationId, intent]
+    );
+    return res.json({ status: "success", data: r.rows?.[0] || null });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== WHATSAPP: METRICS (weekly) =====
+app.post("/api/whatsapp/metrics/weekly", async (req, res) => {
+  try {
+    const tenantPool = await getTenantPoolFromReq(req);
+
+    const r = await tenantPool.query(
+      `WITH conv AS (
+         SELECT id, status, intent, opened_at, closed_at, COALESCE(reopened_count,0) AS reopened_count
+         FROM whatsapp_conversations
+         WHERE COALESCE(opened_at, created_at) >= NOW() - INTERVAL '7 days'
+       ),
+       msg AS (
+         SELECT
+           conversation_id,
+           MIN(created_at) FILTER (WHERE direction='in') AS first_in,
+           MIN(created_at) FILTER (WHERE direction='out') AS first_out,
+           MIN(created_at) FILTER (WHERE direction='out' AND actor='ia') AS first_out_ia,
+           MIN(created_at) FILTER (WHERE direction='out' AND actor='humano') AS first_out_humano,
+           BOOL_OR(direction='out' AND actor='humano') AS has_humano,
+           BOOL_OR(direction='out' AND actor='ia') AS has_ia
+         FROM whatsapp_messages
+         WHERE created_at >= NOW() - INTERVAL '7 days'
+         GROUP BY conversation_id
+       ),
+       joined AS (
+         SELECT
+           c.*, m.*,
+           CASE WHEN m.first_in IS NOT NULL AND m.first_out IS NOT NULL
+             THEN EXTRACT(EPOCH FROM (m.first_out - m.first_in))
+             ELSE NULL END AS frt_sec,
+           CASE WHEN m.first_in IS NOT NULL AND m.first_out_ia IS NOT NULL
+             THEN EXTRACT(EPOCH FROM (m.first_out_ia - m.first_in))
+             ELSE NULL END AS frt_ia_sec,
+           CASE WHEN m.first_in IS NOT NULL AND m.first_out_humano IS NOT NULL
+             THEN EXTRACT(EPOCH FROM (m.first_out_humano - m.first_in))
+             ELSE NULL END AS frt_humano_sec,
+           CASE WHEN c.closed_at IS NOT NULL
+             THEN EXTRACT(EPOCH FROM (c.closed_at - COALESCE(c.opened_at, m.first_in, c.opened_at)))
+             ELSE NULL END AS ttr_sec
+         FROM conv c
+         LEFT JOIN msg m ON m.conversation_id = c.id
+       )
+       SELECT
+         COUNT(*)::int AS conversations_total,
+         SUM(CASE WHEN status = 'RESUELTA' THEN 1 ELSE 0 END)::int AS closed_total,
+         SUM(CASE WHEN has_humano THEN 1 ELSE 0 END)::int AS handoff_total,
+         SUM(CASE WHEN status = 'RESUELTA' AND reopened_count > 0 THEN 1 ELSE 0 END)::int AS reopened_total,
+         SUM(CASE WHEN status = 'RESUELTA' AND has_ia AND NOT has_humano AND reopened_count = 0 THEN 1 ELSE 0 END)::int AS ai_resolved_total,
+         AVG(frt_sec) AS frt_avg_sec,
+         AVG(frt_humano_sec) AS frt_humano_avg_sec,
+         AVG(frt_ia_sec) AS frt_ia_avg_sec,
+         AVG(ttr_sec) AS ttr_avg_sec
+       FROM joined`,
+      []
+    );
+
+    // Top intents
+    const intents = await tenantPool.query(
+      `SELECT COALESCE(NULLIF(TRIM(intent),''),'general') AS intent, COUNT(*)::int AS total
+       FROM whatsapp_conversations
+       WHERE COALESCE(opened_at, created_at) >= NOW() - INTERVAL '7 days'
+       GROUP BY 1
+       ORDER BY total DESC
+       LIMIT 10`
+    );
+
+    return res.json({
+      status: "success",
+      data: {
+        summary: r.rows?.[0] || null,
+        top_intents: intents.rows || [],
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
   }
 });
 
@@ -3448,6 +3702,7 @@ app.post("/api/webhooks/n8n/whatsapp-incoming", async (req, res) => {
     const waMessageId = safeTrim(req.body?.wa_message_id || req.body?.id || "") || null;
     const toPhone = safeTrim(req.body?.to_phone || req.body?.to || req.body?.display_phone_number || "");
     const waTimestamp = req.body?.wa_timestamp != null ? Number(req.body.wa_timestamp) : null;
+    const wabaPhoneNumberId = safeTrim(req.body?.phone_number_id || req.body?.metadata?.phone_number_id || "");
 
     if (!fromPhone || !body) {
       return res.status(400).json({ status: "error", message: "Faltan from_phone o body" });
@@ -3469,6 +3724,7 @@ app.post("/api/webhooks/n8n/whatsapp-incoming", async (req, res) => {
       toPhone,
       body,
       waTimestamp,
+      wabaPhoneNumberId,
     });
 
     if (saved?.message) {
@@ -3512,8 +3768,69 @@ app.post("/api/webhooks/n8n/whatsapp-send", async (req, res) => {
       return res.status(400).json({ status: "error", message: "Faltan to o message" });
     }
 
-    const result = await sendWhatsAppText(req, { aseguradora_id: aseguradoraId, to, message });
+    const actor = String(req.body?.actor || "ia").trim() || "ia";
+    const result = await sendWhatsAppText(req, { aseguradora_id: aseguradoraId, to, message, actor });
     return res.json({ status: "success", ...result });
+  } catch (err) {
+    const code = Number(err?.statusCode) || 500;
+    return res.status(code).json(toSafeApiErrorBody(err));
+  }
+});
+
+// ===== WHATSAPP: SEND VIA N8N (opcional) =====
+// Útil cuando el Inbox (Mensajes) debe pasar por el agente de n8n.
+// Este endpoint sólo "encola" en n8n; el envío real/persistencia puede suceder vía
+// /api/webhooks/n8n/whatsapp-send o el propio provider de n8n (según tu flujo).
+app.post("/api/whatsapp/send-via-n8n", async (req, res) => {
+  try {
+    const url = safeTrim(process.env.N8N_WPP_INBOX_WEBHOOK_URL || "");
+    if (!url) {
+      const e = new Error("Falta N8N_WPP_INBOX_WEBHOOK_URL");
+      e.code = "CONFIG_MISSING";
+      e.service = "n8n";
+      e.missing = ["N8N_WPP_INBOX_WEBHOOK_URL"];
+      throw e;
+    }
+
+    const aseguradoraId = Number(req.body?.aseguradora_id || req.query?.aseguradora_id);
+    const to = safeTrim(req.body?.to || req.body?.telefono || "");
+    const message = safeTrim(req.body?.message || "");
+    const conversationId = req.body?.conversation_id != null ? Number(req.body.conversation_id) : null;
+    const actor = safeTrim(req.body?.actor || "humano") || "humano";
+
+    if (!Number.isFinite(aseguradoraId)) {
+      return res.status(400).json({ status: "error", message: "aseguradora_id requerido" });
+    }
+    if (!to || !message) {
+      return res.status(400).json({ status: "error", message: "Faltan to o message" });
+    }
+
+    const headers = { "Content-Type": "application/json" };
+    const key = safeTrim(process.env.AUTOMATION_API_KEY || "");
+    if (key) headers["x-automation-key"] = key;
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        aseguradora_id: aseguradoraId,
+        to,
+        message,
+        actor,
+        conversation_id: Number.isFinite(conversationId) ? conversationId : null,
+        source: "cogniseguros_inbox",
+      }),
+    });
+
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const msg = data?.message || data?.error?.message || "Error al enviar vía n8n";
+      const e = new Error(msg);
+      e.statusCode = resp.status;
+      throw e;
+    }
+
+    return res.json({ status: "success", queued: true, n8n: data });
   } catch (err) {
     const code = Number(err?.statusCode) || 500;
     return res.status(code).json(toSafeApiErrorBody(err));
@@ -3558,10 +3875,13 @@ app.post("/api/whatsapp/send", async (req, res) => {
       return res.status(400).json({ status: "error", message: "aseguradora_id requerido" });
     }
 
+    const actor = tipo ? "sistema" : String(req.body?.actor || "humano").trim() || "humano";
+
     const result = await sendWhatsAppText(req, {
       aseguradora_id: Number(req.body.aseguradora_id),
       to,
       message,
+      actor,
     });
 
     res.json({ status: "success", ...result });

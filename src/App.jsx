@@ -287,6 +287,14 @@ async function request(payload) {
       url: "/api/whatsapp/messages/list",
       body: { aseguradora_id: rest.aseguradora_id, conversation_id: rest.conversation_id },
     },
+    wppSetConversationStatus: {
+      url: "/api/whatsapp/conversations/set-status",
+      body: { aseguradora_id: rest.aseguradora_id, conversation_id: rest.conversation_id, status: rest.status },
+    },
+    wppSetConversationIntent: {
+      url: "/api/whatsapp/conversations/set-intent",
+      body: { aseguradora_id: rest.aseguradora_id, conversation_id: rest.conversation_id, intent: rest.intent },
+    },
     generateAdCopy: { url: "/api/marketing/copy", body: { aseguradora_id: rest.aseguradora_id, prompt: rest.prompt } },
     generateAdImageOpenAI: { url: "/api/marketing/image", body: rest },
     generateSocialScript: {
@@ -664,6 +672,9 @@ export default function App() {
   const [wppMessages, setWppMessages] = useState([]);
   const [wppComposer, setWppComposer] = useState("");
   const [wppLoading, setWppLoading] = useState(false);
+  const [wppConvStatusFilter, setWppConvStatusFilter] = useState("ALL"); // ALL | PENDIENTE | ATENDIENDO | EN_ESPERA | RESUELTA | REABIERTA
+  const [wppConvIntentFilter, setWppConvIntentFilter] = useState("ALL"); // ALL | <intent>
+  const [wppIntentDraft, setWppIntentDraft] = useState("");
   const [wppSseState, setWppSseState] = useState("disconnected"); // disconnected | connecting | connected | error
   const [wppSseLastEventAt, setWppSseLastEventAt] = useState(null);
   const [wppSseLastErrorAt, setWppSseLastErrorAt] = useState(null);
@@ -2010,6 +2021,55 @@ export default function App() {
     }
   };
 
+  const setWppConversationStatus = async (nextStatus) => {
+    if (!user?.id || !wppActiveConvId) return;
+    const status = String(nextStatus || "").trim().toUpperCase();
+    if (!status) return;
+
+    setWppLoading(true);
+    try {
+      const res = await request({
+        action: "wppSetConversationStatus",
+        aseguradora_id: user.id,
+        conversation_id: wppActiveConvId,
+        status,
+      });
+      const updated = res?.data || null;
+      if (updated?.id != null) {
+        setWppConversations((prev) => (prev || []).map((c) => (Number(c.id) === Number(updated.id) ? { ...c, ...updated } : c)));
+      }
+    } catch (e) {
+      showMessage(e.message, "error");
+    } finally {
+      setWppLoading(false);
+    }
+  };
+
+  const setWppConversationIntent = async () => {
+    if (!user?.id || !wppActiveConvId) return;
+    const intent = String(wppIntentDraft || "").trim().toLowerCase();
+    if (!intent) return showMessage("Intent vacío.", "error");
+
+    setWppLoading(true);
+    try {
+      const res = await request({
+        action: "wppSetConversationIntent",
+        aseguradora_id: user.id,
+        conversation_id: wppActiveConvId,
+        intent,
+      });
+      const updated = res?.data || null;
+      if (updated?.id != null) {
+        setWppConversations((prev) => (prev || []).map((c) => (Number(c.id) === Number(updated.id) ? { ...c, ...updated } : c)));
+      }
+      setWppIntentDraft(String(updated?.intent ?? intent).trim().toLowerCase());
+    } catch (e) {
+      showMessage(e.message, "error");
+    } finally {
+      setWppLoading(false);
+    }
+  };
+
   const sendWppInboxMessage = async () => {
     if (!user?.id || !wppActiveConvId) return;
     const conv = (wppConversations || []).find((c) => Number(c.id) === Number(wppActiveConvId));
@@ -2021,16 +2081,30 @@ export default function App() {
     setWppComposer("");
     setWppLoading(true);
     try {
-      // Reutilizamos /api/whatsapp/send (compat) y guardamos en inbox del backend
-      await fetch("/api/whatsapp/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ aseguradora_id: user.id, to, message: msg }),
-      }).then(async (r) => {
-        const d = await r.json();
-        if (d?.status === "error") throw new Error(d.message || "Error");
-        return d;
-      });
+      // Preferimos n8n (agente WhatsApp) y caemos a envío directo si no está configurado.
+      const trySend = async (url) => {
+        return fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ aseguradora_id: user.id, to, message: msg, conversation_id: wppActiveConvId }),
+        }).then(async (r) => {
+          const d = await r.json();
+          if (d?.status === "error") throw Object.assign(new Error(d.message || "Error"), d);
+          return d;
+        });
+      };
+
+      try {
+        await trySend("/api/whatsapp/send-via-n8n");
+      } catch (e) {
+        // Si n8n no está configurado o falló el proxy, usamos el envío directo.
+        if (e?.code === "CONFIG_MISSING") {
+          await trySend("/api/whatsapp/send");
+        } else {
+          // fallback seguro al endpoint clásico
+          await trySend("/api/whatsapp/send");
+        }
+      }
 
       // El SSE debería traer la confirmación; refrescamos por seguridad.
       await loadWppMessages(wppActiveConvId);
@@ -4604,24 +4678,84 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-5">
                 <div className="bg-[var(--panel)] rounded-3xl border border-[var(--line)] overflow-hidden">
                   <div className="px-5 py-4 border-b border-[var(--line)]">
-                    <div className="text-sm font-black text-[var(--text)]">Chats</div>
-                    <div className="text-[11px] text-[var(--muted)]">Entrantes y salientes en tiempo real</div>
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-black text-[var(--text)]">Chats</div>
+                        <div className="text-[11px] text-[var(--muted)]">Entrantes y salientes en tiempo real</div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <div className="px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.10)]">
+                          <select
+                            value={wppConvStatusFilter}
+                            onChange={(e) => setWppConvStatusFilter(e.target.value)}
+                            className="outline-none text-xs font-black text-[var(--text)] bg-transparent"
+                            title="Filtrar por estado"
+                          >
+                            <option value="ALL">TODOS</option>
+                            <option value="PENDIENTE">PENDIENTE</option>
+                            <option value="ATENDIENDO">ATENDIENDO</option>
+                            <option value="EN_ESPERA">EN_ESPERA</option>
+                            <option value="RESUELTA">RESUELTA</option>
+                            <option value="REABIERTA">REABIERTA</option>
+                          </select>
+                        </div>
+
+                        <div className="px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.10)]">
+                          <select
+                            value={wppConvIntentFilter}
+                            onChange={(e) => setWppConvIntentFilter(e.target.value)}
+                            className="outline-none text-xs font-black text-[var(--text)] bg-transparent"
+                            title="Filtrar por intent"
+                          >
+                            <option value="ALL">INTENT: TODOS</option>
+                            {Array.from(
+                              new Set(
+                                (wppConversations || [])
+                                  .map((c) => String(c?.intent || "general").trim().toLowerCase())
+                                  .filter(Boolean)
+                              )
+                            )
+                              .sort()
+                              .slice(0, 25)
+                              .map((intent) => (
+                                <option key={intent} value={intent}>
+                                  {intent}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="max-h-[70vh] overflow-auto">
                     {(wppConversations || []).length === 0 ? (
                       <div className="p-6 text-sm text-[var(--muted)]">Aún no hay conversaciones.</div>
                     ) : (
-                      (wppConversations || []).map((c) => {
+                      (wppConversations || [])
+                        .filter((c) => {
+                          const s = String(c?.status || "PENDIENTE").trim().toUpperCase() || "PENDIENTE";
+                          if (wppConvStatusFilter === "ALL") return true;
+                          return s === String(wppConvStatusFilter).trim().toUpperCase();
+                        })
+                        .filter((c) => {
+                          if (wppConvIntentFilter === "ALL") return true;
+                          const intent = String(c?.intent || "general").trim().toLowerCase() || "general";
+                          return intent === String(wppConvIntentFilter).trim().toLowerCase();
+                        })
+                        .map((c) => {
                         const active = Number(wppActiveConvId) === Number(c.id);
                         const title = (c.name || "").trim() || (c.phone || c.wa_contact || "");
                         const preview = String(c.last_body || "").trim();
+                        const status = String(c.status || "PENDIENTE").trim().toUpperCase() || "PENDIENTE";
                         return (
                           <button
                             key={c.id}
                             type="button"
                             onClick={async () => {
                               setWppActiveConvId(c.id);
+                              setWppIntentDraft(String(c?.intent || "general").trim().toLowerCase() || "general");
                               await loadWppMessages(c.id);
                             }}
                             className={
@@ -4637,6 +4771,7 @@ export default function App() {
                                 <div className="text-[12px] text-[var(--muted)] truncate">{preview || "—"}</div>
                               </div>
                               <div className="text-[10px] text-[var(--muted)] shrink-0">
+                                <div className="text-right text-[10px] text-[var(--muted)] font-black">{status}</div>
                                 {c.last_created_at ? new Date(c.last_created_at).toLocaleString() : ""}
                               </div>
                             </div>
@@ -4666,14 +4801,58 @@ export default function App() {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => wppActiveConvId && loadWppMessages(wppActiveConvId)}
-                      className="px-4 py-2 rounded-xl bg-[rgba(255,255,255,.04)] hover:bg-[rgba(255,255,255,.06)] text-xs font-black flex items-center gap-2 border border-[rgba(255,255,255,.10)]"
-                      disabled={!wppActiveConvId || wppLoading}
-                    >
-                      <RefreshCcw size={16} /> Recargar
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <div className="hidden md:flex items-center gap-2 px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.10)]">
+                        <div className="text-[10px] text-[var(--muted)] font-black">INTENT</div>
+                        <input
+                          value={wppIntentDraft}
+                          onChange={(e) => setWppIntentDraft(e.target.value)}
+                          placeholder={(() => {
+                            const conv = (wppConversations || []).find((x) => Number(x.id) === Number(wppActiveConvId));
+                            return String(conv?.intent || "general").trim().toLowerCase() || "general";
+                          })()}
+                          className="w-[140px] bg-transparent outline-none text-xs font-black text-[var(--text)] placeholder:text-[var(--muted)]"
+                          disabled={!wppActiveConvId || wppLoading}
+                        />
+                        <button
+                          type="button"
+                          onClick={setWppConversationIntent}
+                          disabled={!wppActiveConvId || wppLoading || !String(wppIntentDraft || "").trim()}
+                          className="px-3 py-1 rounded-lg bg-[rgba(63,209,255,.14)] border border-[rgba(63,209,255,.32)] text-[11px] font-black text-[var(--text)] hover:bg-[rgba(63,209,255,.20)] disabled:opacity-60"
+                          title="Guardar intent"
+                        >
+                          Guardar
+                        </button>
+                      </div>
+
+                      <div className="px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.10)]">
+                        <select
+                          value={(() => {
+                            const conv = (wppConversations || []).find((x) => Number(x.id) === Number(wppActiveConvId));
+                            return String(conv?.status || "PENDIENTE").trim().toUpperCase() || "PENDIENTE";
+                          })()}
+                          onChange={(e) => setWppConversationStatus(e.target.value)}
+                          className="outline-none text-xs font-black text-[var(--text)] bg-transparent"
+                          disabled={!wppActiveConvId || wppLoading}
+                          title="Estado de la conversación"
+                        >
+                          <option value="PENDIENTE">PENDIENTE</option>
+                          <option value="ATENDIENDO">ATENDIENDO</option>
+                          <option value="EN_ESPERA">EN_ESPERA</option>
+                          <option value="RESUELTA">RESUELTA</option>
+                          <option value="REABIERTA">REABIERTA</option>
+                        </select>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => wppActiveConvId && loadWppMessages(wppActiveConvId)}
+                        className="px-4 py-2 rounded-xl bg-[rgba(255,255,255,.04)] hover:bg-[rgba(255,255,255,.06)] text-xs font-black flex items-center gap-2 border border-[rgba(255,255,255,.10)]"
+                        disabled={!wppActiveConvId || wppLoading}
+                      >
+                        <RefreshCcw size={16} /> Recargar
+                      </button>
+                    </div>
                   </div>
 
                   <div className="flex-1 p-5 overflow-auto">

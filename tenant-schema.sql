@@ -52,12 +52,26 @@ CREATE TABLE IF NOT EXISTS whatsapp_conversations (
   wa_contact VARCHAR(64) NOT NULL,
   phone VARCHAR(32) NOT NULL,
   name TEXT NOT NULL DEFAULT '',
+  status TEXT DEFAULT 'PENDIENTE',
+  intent TEXT DEFAULT 'general',
+  opened_at TIMESTAMPTZ DEFAULT NOW(),
+  last_inbound_at TIMESTAMPTZ,
+  last_outbound_at TIMESTAMPTZ,
+  closed_at TIMESTAMPTZ,
+  last_actor TEXT DEFAULT 'cliente',
+  assigned_to TEXT,
+  requires_template BOOLEAN DEFAULT FALSE,
+  resolution_type TEXT,
+  reopened_count INT DEFAULT 0,
+  waba_phone_number_id TEXT,
   last_message_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_whatsapp_conversations_wa_contact ON whatsapp_conversations(wa_contact);
+CREATE INDEX IF NOT EXISTS ix_whatsapp_conversations_status_last_inbound ON whatsapp_conversations(status, last_inbound_at DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS ix_whatsapp_conversations_intent_last_inbound ON whatsapp_conversations(intent, last_inbound_at DESC NULLS LAST);
 
 CREATE TABLE IF NOT EXISTS whatsapp_messages (
   id BIGSERIAL PRIMARY KEY,
@@ -68,9 +82,14 @@ CREATE TABLE IF NOT EXISTS whatsapp_messages (
   to_phone VARCHAR(32) NOT NULL,
   body TEXT NOT NULL DEFAULT '',
   wa_timestamp BIGINT,
+  actor TEXT DEFAULT 'cliente',
+  type TEXT DEFAULT 'text',
+  content_meta JSONB,
+  delivery_status TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Nota: índice UNIQUE no-parcial para permitir ON CONFLICT(wa_message_id)
 CREATE UNIQUE INDEX IF NOT EXISTS ux_whatsapp_messages_wa_message_id_full ON whatsapp_messages(wa_message_id);
 CREATE INDEX IF NOT EXISTS ix_whatsapp_messages_conversation_created_at ON whatsapp_messages(conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_whatsapp_messages_conversation_created_at_desc ON whatsapp_messages(conversation_id, created_at DESC);
