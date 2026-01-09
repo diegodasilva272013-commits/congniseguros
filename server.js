@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import pkg from "pg";
+import compression from "compression";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
@@ -35,6 +36,12 @@ const APP_STARTED_AT = new Date().toISOString();
 const app = express();
 app.use(cors());
 app.use(
+  compression({
+    // Comprime respuestas grandes (JS/CSS/JSON). Esto mejora mucho la carga inicial en prod.
+    threshold: 1024,
+  })
+);
+app.use(
   express.json({
     limit: "50mb",
     verify: (req, _res, buf) => {
@@ -50,7 +57,13 @@ const distIndexHtml = path.join(distDir, "index.html");
 const hasFrontendBuild = fs.existsSync(distIndexHtml);
 
 if (hasFrontendBuild) {
-  app.use(express.static(distDir));
+  // Assets de Vite tienen hash -> cache fuerte. Index NO se cachea (ver ruta "/").
+  app.use(
+    express.static(distDir, {
+      immutable: true,
+      maxAge: "1d",
+    })
+  );
 }
 
 // ===== CLIENT PORTAL (seguro): sesión por código =====
