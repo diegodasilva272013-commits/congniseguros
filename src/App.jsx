@@ -4692,12 +4692,12 @@ export default function App() {
                             className="outline-none text-xs font-black text-[var(--text)] bg-transparent"
                             title="Filtrar por estado"
                           >
-                            <option value="ALL">TODOS</option>
-                            <option value="PENDIENTE">PENDIENTE</option>
-                            <option value="ATENDIENDO">ATENDIENDO</option>
-                            <option value="EN_ESPERA">EN_ESPERA</option>
-                            <option value="RESUELTA">RESUELTA</option>
-                            <option value="REABIERTA">REABIERTA</option>
+                            <option className="bg-white text-slate-900" value="ALL">TODOS</option>
+                            <option className="bg-white text-slate-900" value="PENDIENTE">PENDIENTE</option>
+                            <option className="bg-white text-slate-900" value="ATENDIENDO">ATENDIENDO</option>
+                            <option className="bg-white text-slate-900" value="EN_ESPERA">EN_ESPERA</option>
+                            <option className="bg-white text-slate-900" value="RESUELTA">RESUELTA</option>
+                            <option className="bg-white text-slate-900" value="REABIERTA">REABIERTA</option>
                           </select>
                         </div>
 
@@ -4708,7 +4708,7 @@ export default function App() {
                             className="outline-none text-xs font-black text-[var(--text)] bg-transparent"
                             title="Filtrar por intent"
                           >
-                            <option value="ALL">INTENT: TODOS</option>
+                            <option className="bg-white text-slate-900" value="ALL">INTENT: TODOS</option>
                             {Array.from(
                               new Set(
                                 (wppConversations || [])
@@ -4719,7 +4719,7 @@ export default function App() {
                               .sort()
                               .slice(0, 25)
                               .map((intent) => (
-                                <option key={intent} value={intent}>
+                                  <option className="bg-white text-slate-900" key={intent} value={intent}>
                                   {intent}
                                 </option>
                               ))}
@@ -4836,11 +4836,11 @@ export default function App() {
                           disabled={!wppActiveConvId || wppLoading}
                           title="Estado de la conversación"
                         >
-                          <option value="PENDIENTE">PENDIENTE</option>
-                          <option value="ATENDIENDO">ATENDIENDO</option>
-                          <option value="EN_ESPERA">EN_ESPERA</option>
-                          <option value="RESUELTA">RESUELTA</option>
-                          <option value="REABIERTA">REABIERTA</option>
+                          <option className="bg-white text-slate-900" value="PENDIENTE">PENDIENTE</option>
+                          <option className="bg-white text-slate-900" value="ATENDIENDO">ATENDIENDO</option>
+                          <option className="bg-white text-slate-900" value="EN_ESPERA">EN_ESPERA</option>
+                          <option className="bg-white text-slate-900" value="RESUELTA">RESUELTA</option>
+                          <option className="bg-white text-slate-900" value="REABIERTA">REABIERTA</option>
                         </select>
                       </div>
 
