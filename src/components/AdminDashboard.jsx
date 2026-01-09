@@ -17,6 +17,7 @@ export default function AdminDashboard() {
   const [tab, setTab] = useState("invitaciones"); // invitaciones, usuarios, suscripciones, pagos, planes, auditoria
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [migratingWpp, setMigratingWpp] = useState(false);
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [modalData, setModalData] = useState({});
@@ -391,6 +392,40 @@ export default function AdminDashboard() {
       JSON.stringify(item).toLowerCase().includes(search.toLowerCase())
   );
 
+  const migrateWhatsappInboxAllTenants = async () => {
+    if (!window.confirm("Esto migrará/creará el schema de WhatsApp Inbox en TODOS los tenants. ¿Continuar?")) return;
+    setMigratingWpp(true);
+    try {
+      const token = sessionStorage.getItem("token");
+      if (!token) {
+        alert("Sesión vencida. Volvé a ingresar al Admin.");
+        return;
+      }
+
+      const res = await fetch("/api/admin/migrate/whatsapp-inbox", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      });
+      const result = await res.json();
+      if (result.status !== "success") {
+        alert(result.message || "No se pudo ejecutar la migración");
+        return;
+      }
+
+      const ok = result?.data?.ok ?? 0;
+      const fail = result?.data?.fail ?? 0;
+      alert(`Migración WhatsApp Inbox finalizada. OK=${ok} FAIL=${fail}`);
+    } catch (err) {
+      alert("Error: " + (err?.message || String(err)));
+    } finally {
+      setMigratingWpp(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-100">
       {/* Header */}
@@ -398,6 +433,19 @@ export default function AdminDashboard() {
         <div className="max-w-7xl mx-auto px-4 py-6">
           <h1 className="text-3xl font-bold">👨‍💼 Admin Dashboard</h1>
           <p className="text-gray-600">Gestión de suscripciones y usuarios</p>
+
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={migrateWhatsappInboxAllTenants}
+              disabled={migratingWpp}
+              className={`px-4 py-2 rounded text-white font-bold ${
+                migratingWpp ? "bg-gray-400" : "bg-slate-900 hover:bg-slate-800"
+              }`}
+            >
+              {migratingWpp ? "Migrando WhatsApp Inbox..." : "Migrar WhatsApp Inbox (todos los tenants)"}
+            </button>
+          </div>
         </div>
       </div>
 

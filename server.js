@@ -4919,6 +4919,143 @@ app.get("/api/admin/auditoria/listar", async (req, res) => {
   }
 });
 
+// ===== ADMIN: MIGRAR WHATSAPP INBOX (TODOS LOS TENANTS) =====
+// One-click para producción: crea DBs tenant si faltan (si hay permisos) y asegura schema WhatsApp Inbox.
+app.post("/api/admin/migrate/whatsapp-inbox", async (req, res) => {
+  try {
+    const admin = await requireAdminAccess(req);
+    if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
+
+    // asegurar columna tenant_db
+    await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS tenant_db TEXT").catch(() => {});
+
+    const r = await pool.query(
+      "SELECT id, COALESCE(NULLIF(TRIM(tenant_db), ''), '') AS tenant_db FROM usuarios ORDER BY id ASC"
+    );
+    const rows = Array.isArray(r.rows) ? r.rows : [];
+
+    const results = [];
+
+    for (const u of rows) {
+      const userId = Number(u?.id);
+      if (!Number.isFinite(userId)) continue;
+
+      let tenantDb = String(u?.tenant_db || "").trim();
+      if (!tenantDb) {
+        tenantDb = getTenantDbNameForUserId(userId);
+        // persistir para que el backend use siempre el mismo nombre
+        await pool.query("UPDATE usuarios SET tenant_db = $1 WHERE id = $2", [tenantDb, userId]).catch(() => {});
+      }
+
+      try {
+        // 1) crear DB + aplicar tenant-schema.sql (si hay permisos)
+        await ensureTenantDbExists(tenantDb);
+
+        // 2) asegurar schema evolutivo (idempotente)
+        const tenantPool = getOrCreateTenantPoolByDbName(tenantDb);
+
+        // clientes.pais (no rompe si ya existe)
+        await ensureTenantClientesPaisSchema(tenantPool);
+
+        // WhatsApp Inbox base + evoluciones (con errores visibles)
+        await tenantPool.query(
+          `CREATE TABLE IF NOT EXISTS whatsapp_conversations (
+            id BIGSERIAL PRIMARY KEY,
+            wa_contact VARCHAR(64) NOT NULL,
+            phone VARCHAR(32) NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            last_message_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )`
+        );
+        await tenantPool.query(
+          "CREATE UNIQUE INDEX IF NOT EXISTS ux_whatsapp_conversations_wa_contact ON whatsapp_conversations(wa_contact)"
+        );
+
+        await tenantPool.query(
+          `CREATE TABLE IF NOT EXISTS whatsapp_messages (
+            id BIGSERIAL PRIMARY KEY,
+            conversation_id BIGINT NOT NULL REFERENCES whatsapp_conversations(id) ON DELETE CASCADE,
+            direction VARCHAR(8) NOT NULL CHECK (direction IN ('in','out')),
+            wa_message_id VARCHAR(128),
+            from_phone VARCHAR(32) NOT NULL,
+            to_phone VARCHAR(32) NOT NULL,
+            body TEXT NOT NULL DEFAULT '',
+            wa_timestamp BIGINT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )`
+        );
+        await tenantPool.query(
+          "CREATE UNIQUE INDEX IF NOT EXISTS ux_whatsapp_messages_wa_message_id_full ON whatsapp_messages(wa_message_id)"
+        );
+        await tenantPool.query(
+          "CREATE INDEX IF NOT EXISTS ix_whatsapp_messages_conversation_created_at ON whatsapp_messages(conversation_id, created_at)"
+        );
+
+        // Conversaciones: estados, intent, timestamps, asignación, métricas
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'PENDIENTE'");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS intent TEXT DEFAULT 'general'");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ DEFAULT NOW()");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS last_inbound_at TIMESTAMPTZ");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS last_outbound_at TIMESTAMPTZ");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS last_actor TEXT DEFAULT 'cliente'");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS assigned_to TEXT");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS requires_template BOOLEAN DEFAULT FALSE");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS resolution_type TEXT");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS reopened_count INT DEFAULT 0");
+        await tenantPool.query("ALTER TABLE whatsapp_conversations ADD COLUMN IF NOT EXISTS waba_phone_number_id TEXT");
+
+        await tenantPool.query(
+          "CREATE INDEX IF NOT EXISTS ix_whatsapp_conversations_status_last_inbound ON whatsapp_conversations(status, last_inbound_at DESC NULLS LAST)"
+        );
+        await tenantPool.query(
+          "CREATE INDEX IF NOT EXISTS ix_whatsapp_conversations_intent_last_inbound ON whatsapp_conversations(intent, last_inbound_at DESC NULLS LAST)"
+        );
+
+        // Mensajes: actor, tipo, metadata, delivery
+        await tenantPool.query("ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS actor TEXT DEFAULT 'cliente'");
+        await tenantPool.query("ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'text'");
+        await tenantPool.query("ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS content_meta JSONB");
+        await tenantPool.query("ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS delivery_status TEXT");
+        await tenantPool.query(
+          "CREATE INDEX IF NOT EXISTS ix_whatsapp_messages_conversation_created_at_desc ON whatsapp_messages(conversation_id, created_at DESC)"
+        );
+
+        results.push({ user_id: userId, tenant_db: tenantDb, ok: true });
+      } catch (err) {
+        results.push({
+          user_id: userId,
+          tenant_db: tenantDb,
+          ok: false,
+          code: err?.code,
+          message: err?.message || String(err),
+        });
+      }
+    }
+
+    const okCount = results.filter((x) => x.ok).length;
+    const failCount = results.length - okCount;
+
+    await logAudit(admin.usuario_id, "ADMIN_MIGRATE_WHATSAPP_INBOX", "tenants", {
+      ok: okCount,
+      fail: failCount,
+    }).catch(() => {});
+
+    return res.json({
+      status: "success",
+      data: {
+        ok: okCount,
+        fail: failCount,
+        results,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
 // ===== ADMIN: ELIMINAR INVITACIÓN =====
 app.post("/api/admin/invitaciones/eliminar", async (req, res) => {
   try {
