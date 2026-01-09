@@ -608,6 +608,9 @@ const MASTER_DB_NAME = process.env.DB_NAME || "cogniseguros";
 const TENANT_DB_PREFIX = process.env.TENANT_DB_PREFIX || "cogniseguros_tenant_";
 const tenantPools = new Map();
 
+// Cache de migraciones ligeras por tenant (evita ALTER/CREATE en cada request)
+const tenantSchemaEnsurePromises = new Map(); // tenantDb -> Promise
+
 // Pool admin (para CREATE DATABASE). Debe conectarse a una DB existente.
 const adminPool = new Pool({
   user: process.env.DB_USER || "postgres",
@@ -664,6 +667,69 @@ const getOrCreateTenantPoolByDbName = (dbName) => {
   });
   tenantPools.set(dbName, p);
   return p;
+};
+
+const ensureTenantSchemasCached = async (tenantDb, tenantPool) => {
+  const key = String(tenantDb || "").trim();
+  if (!key) return;
+  if (tenantSchemaEnsurePromises.has(key)) {
+    await tenantSchemaEnsurePromises.get(key);
+    return;
+  }
+
+  const work = (async () => {
+    await ensureTenantClientesPaisSchema(tenantPool);
+    await ensureTenantWhatsAppInboxSchema(tenantPool);
+  })();
+
+  tenantSchemaEnsurePromises.set(key, work);
+  try {
+    await work;
+  } catch (e) {
+    // si falla, dejamos que se reintente en la próxima request
+    tenantSchemaEnsurePromises.delete(key);
+    throw e;
+  }
+};
+
+const getTenantPoolForUserIdFast = async ({ userId, allowCreate = false }) => {
+  const id = Number(userId);
+  if (!Number.isFinite(id)) throw new Error("aseguradora_id inválido");
+
+  // asegurar columna tenant_db
+  await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS tenant_db TEXT").catch(() => {});
+
+  const r = await pool.query("SELECT id, tenant_db FROM usuarios WHERE id = $1", [id]);
+  if (r.rows.length === 0) throw new Error("Usuario no encontrado");
+
+  let tenantDb = String(r.rows[0].tenant_db || "").trim();
+  if (!tenantDb) {
+    tenantDb = getTenantDbNameForUserId(id);
+    await pool.query("UPDATE usuarios SET tenant_db = $1 WHERE id = $2", [tenantDb, id]).catch(() => {});
+  }
+
+  const exists = await adminPool.query("SELECT 1 FROM pg_database WHERE datname = $1", [tenantDb]);
+  if (exists.rows.length === 0) {
+    if (!allowCreate) {
+      const e = new Error(`Tenant DB no existe: ${tenantDb}`);
+      e.code = "TENANT_DB_NOT_FOUND";
+      throw e;
+    }
+    await ensureTenantDbExists(tenantDb);
+  }
+
+  const tenantPool = getOrCreateTenantPoolByDbName(tenantDb);
+
+  // Si la DB existía pero faltaba schema base, lo aplicamos una vez.
+  try {
+    await tenantPool.query("SELECT 1 FROM clientes LIMIT 1");
+  } catch {
+    const schemaSql = loadTenantSchemaSql();
+    await tenantPool.query(schemaSql);
+  }
+
+  await ensureTenantSchemasCached(tenantDb, tenantPool);
+  return { tenantDb, tenantPool };
 };
 
 const loadTenantSchemaSql = () => {
@@ -1131,9 +1197,7 @@ const getTenantPoolFromReq = async (req) => {
   if (!raw) throw new Error("aseguradora_id requerido");
   const userId = Number(raw);
   if (!Number.isFinite(userId)) throw new Error("aseguradora_id inválido");
-  const { tenantPool } = await ensureTenantForUserId(userId);
-  await ensureTenantClientesPaisSchema(tenantPool);
-  await ensureTenantWhatsAppInboxSchema(tenantPool);
+  const { tenantPool } = await getTenantPoolForUserIdFast({ userId, allowCreate: false });
   return tenantPool;
 };
 
@@ -3163,6 +3227,11 @@ app.get("/api/whatsapp/webhook", async (req, res) => {
 });
 
 const verifyMetaWebhookSignature = (req) => {
+  // Diagnóstico: si META_APP_SECRET está mal seteado, el webhook se rechaza.
+  // Permite desactivar la verificación temporalmente (bajo tu control) con META_WEBHOOK_DISABLE_SIGNATURE=1
+  if (String(process.env.META_WEBHOOK_DISABLE_SIGNATURE || "").trim() === "1") {
+    return { ok: true, skipped: true, disabled: true };
+  }
   const secret = String(process.env.META_APP_SECRET || "").trim();
   if (!secret) return { ok: true, skipped: true };
 
