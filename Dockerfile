@@ -29,12 +29,16 @@ COPY --from=build /app/dist ./dist
 # Copy backend + runtime files
 COPY --from=build /app/server.js ./server.js
 COPY --from=build /app/email-auth.js ./email-auth.js
+COPY --from=build /app/scoring-engine.js ./scoring-engine.js
+COPY --from=build /app/audience-engine.js ./audience-engine.js
+COPY --from=build /app/notification-engine.js ./notification-engine.js
 COPY --from=build /app/tenant-schema.sql ./tenant-schema.sql
 COPY --from=build /app/schema.sql ./schema.sql
 COPY --from=build /app/schema_2fa.sql ./schema_2fa.sql
 COPY --from=build /app/schema_seguridad.sql ./schema_seguridad.sql
 COPY --from=build /app/setup-db.js ./setup-db.js
 COPY --from=build /app/migrate.js ./migrate.js
+COPY --from=build /app/migrations ./migrations
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/package.json ./package.json
 

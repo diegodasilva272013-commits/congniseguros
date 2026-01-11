@@ -10,17 +10,66 @@ import jwt from "jsonwebtoken";
 import { sendCodeEmail, sendVerificationCode, verifyCode } from "./email-auth.js";
 import fs from "fs";
 import path from "path";
-import {
-  activateRuleSet,
-  ensureDefaultScoringRuleSet,
-  ensureTenantScoringSchema,
-  getRuleSetWithRules,
-  getScoringRun,
-  listRuleSets,
-  listScoringRuns,
-  scoreCliente,
-  upsertRuleSet,
-} from "./scoring-engine.js";
+
+// NOTE: scoring-engine is optional at runtime (some deploy setups mount /app and may omit files).
+// We load it dynamically so the whole server doesn't crash if it's missing.
+let scoringEngineAvailable = false;
+let scoringEngineLoadError = null;
+
+let activateRuleSet = async () => {
+  const e = new Error("Scoring engine no disponible");
+  e.code = "SCORING_ENGINE_UNAVAILABLE";
+  throw e;
+};
+let ensureDefaultScoringRuleSet = async () => {};
+let ensureTenantScoringSchema = async () => {};
+let getRuleSetWithRules = async () => {
+  const e = new Error("Scoring engine no disponible");
+  e.code = "SCORING_ENGINE_UNAVAILABLE";
+  throw e;
+};
+let getScoringRun = async () => {
+  const e = new Error("Scoring engine no disponible");
+  e.code = "SCORING_ENGINE_UNAVAILABLE";
+  throw e;
+};
+let listRuleSets = async () => {
+  const e = new Error("Scoring engine no disponible");
+  e.code = "SCORING_ENGINE_UNAVAILABLE";
+  throw e;
+};
+let listScoringRuns = async () => {
+  const e = new Error("Scoring engine no disponible");
+  e.code = "SCORING_ENGINE_UNAVAILABLE";
+  throw e;
+};
+let scoreCliente = async () => {
+  const e = new Error("Scoring engine no disponible");
+  e.code = "SCORING_ENGINE_UNAVAILABLE";
+  throw e;
+};
+let upsertRuleSet = async () => {
+  const e = new Error("Scoring engine no disponible");
+  e.code = "SCORING_ENGINE_UNAVAILABLE";
+  throw e;
+};
+
+try {
+  const scoring = await import("./scoring-engine.js");
+  activateRuleSet = scoring.activateRuleSet;
+  ensureDefaultScoringRuleSet = scoring.ensureDefaultScoringRuleSet;
+  ensureTenantScoringSchema = scoring.ensureTenantScoringSchema;
+  getRuleSetWithRules = scoring.getRuleSetWithRules;
+  getScoringRun = scoring.getScoringRun;
+  listRuleSets = scoring.listRuleSets;
+  listScoringRuns = scoring.listScoringRuns;
+  scoreCliente = scoring.scoreCliente;
+  upsertRuleSet = scoring.upsertRuleSet;
+  scoringEngineAvailable = true;
+} catch (err) {
+  scoringEngineLoadError = err;
+  console.warn("[scoring] scoring-engine.js no disponible; SCORING deshabilitado:", err?.message || err);
+}
 import {
   createCampaign,
   ensureDefaultAudienceDefinitions,
@@ -3118,6 +3167,182 @@ app.post("/api/reports/portfolio/clients-revenue", async (req, res) => {
       to: toIso,
       order,
       limit,
+      rows,
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err?.message || String(err) });
+  }
+});
+
+app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
+  try {
+    const aseguradoraId = req.body?.aseguradora_id;
+    if (!aseguradoraId) return res.status(400).json({ status: "error", message: "aseguradora_id requerido" });
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    if (!canAccessAseguradora(req, aseguradoraId)) {
+      return res.status(401).json({ status: "error", message: "No autorizado" });
+    }
+
+    const includeAll = req.body?.include_all !== false;
+
+    const to = parseDateFromReq(req.body?.to) || new Date();
+    const from = parseDateFromReq(req.body?.from) || new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    const fromIso = toIsoOrNull(from);
+    const toIso = toIsoOrNull(to);
+    if (!fromIso || !toIso) return res.status(400).json({ status: "error", message: "from/to inválidos" });
+
+    const orderRaw = String(req.query?.order || "desc").trim().toLowerCase();
+    const order = orderRaw === "asc" ? "asc" : "desc";
+    const limitRaw = Number(req.query?.limit ?? 30);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.floor(limitRaw), 1), 200) : 30;
+    const paidOnly = String(req.query?.paid_only || "0").trim() === "1";
+
+    const tenantPool = await getTenantPoolFromReq({ ...req, body: { ...(req.body || {}), aseguradora_id: aseguradoraId } });
+    const allowedPaises = await getAllowedPaisesForAseguradoraId(aseguradoraId);
+
+    const lineaExpr = `
+      CASE
+        WHEN (LOWER(COALESCE(descripcion_seguro,'')) || ' ' || LOWER(COALESCE(polizas,''))) ~ '(\\bauto\\b|veh[ií]c|\\bcar\\b|\\bcoche\\b|\\bmoto\\b|\\bpatente\\b)' THEN 'AUTO'
+        WHEN (LOWER(COALESCE(descripcion_seguro,'')) || ' ' || LOWER(COALESCE(polizas,''))) ~ '(\\bvida\\b|fallec|benefici|\\binvalidez\\b)' THEN 'VIDA'
+        ELSE 'OTRO'
+      END
+    `;
+
+    const queryText = `
+      WITH base AS (
+        SELECT
+          id,
+          pais,
+          COALESCE(nombre,'') AS nombre,
+          COALESCE(apellido,'') AS apellido,
+          COALESCE(documento,'') AS documento,
+          COALESCE(telefono,'') AS telefono,
+          COALESCE(mail,'') AS mail,
+          ${lineaExpr} AS linea,
+          COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
+          COALESCE(monto, 0)::numeric(14,2) AS monto
+        FROM clientes
+        WHERE pais = ANY($1::text[])
+          AND ($6::bool = false OR UPPER(COALESCE(cuota_paga,'')) = 'SI')
+          AND (
+            $5::bool = true
+            OR (fecha_alta IS NOT NULL AND fecha_alta >= $2::timestamptz AND fecha_alta < $3::timestamptz)
+          )
+      ),
+      grouped AS (
+        SELECT
+          MIN(id)::int AS id,
+          MAX(pais) AS pais,
+          MAX(nombre) AS nombre,
+          MAX(apellido) AS apellido,
+          doc_key AS documento,
+          MAX(telefono) AS telefono,
+          MAX(mail) AS mail,
+          MAX(linea) AS linea,
+          MAX(cuota_paga) AS cuota_paga,
+          COUNT(*)::int AS items,
+          COALESCE(SUM(monto), 0)::numeric(14,2) AS ingreso_mensual,
+          COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN monto ELSE 0 END), 0)::numeric(14,2) AS ingreso_mensual_cobrado
+        FROM (
+          SELECT *, COALESCE(NULLIF(TRIM(documento), ''), id::text) AS doc_key
+          FROM base
+        ) t
+        GROUP BY doc_key
+      )
+      SELECT
+        *,
+        (ingreso_mensual * 12)::numeric(14,2) AS ingreso_anual,
+        (ingreso_mensual_cobrado * 12)::numeric(14,2) AS ingreso_anual_cobrado,
+        CASE WHEN SUM(ingreso_mensual) OVER() = 0 THEN 0
+          ELSE (ingreso_mensual / SUM(ingreso_mensual) OVER() * 100)
+        END::numeric(10,2) AS pct_cartera_mensual,
+        CASE WHEN SUM(ingreso_mensual) OVER() = 0 THEN 0
+          ELSE (ingreso_mensual / SUM(ingreso_mensual) OVER() * 100)
+        END::numeric(10,2) AS pct_cartera_anual
+      FROM grouped
+      ORDER BY ingreso_mensual ${order}, id ASC
+      LIMIT $4::int
+    `;
+
+    const totalsText = `
+      WITH base AS (
+        SELECT
+          COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
+          COALESCE(monto, 0)::numeric(14,2) AS monto
+        FROM clientes
+        WHERE pais = ANY($1::text[])
+          AND ($6::bool = false OR UPPER(COALESCE(cuota_paga,'')) = 'SI')
+          AND (
+            $5::bool = true
+            OR (fecha_alta IS NOT NULL AND fecha_alta >= $2::timestamptz AND fecha_alta < $3::timestamptz)
+          )
+      )
+      SELECT
+        COALESCE(SUM(monto), 0)::numeric(14,2) AS ingreso_mensual_total,
+        (COALESCE(SUM(monto), 0) * 12)::numeric(14,2) AS ingreso_anual_total,
+        COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN monto ELSE 0 END), 0)::numeric(14,2) AS ingreso_mensual_cobrado,
+        (COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN monto ELSE 0 END), 0) * 12)::numeric(14,2) AS ingreso_anual_cobrado
+    `;
+
+    const rowsParams = [allowedPaises, fromIso, toIso, limit, includeAll, paidOnly];
+    const totalsParams = [allowedPaises, fromIso, toIso, 0, includeAll, paidOnly];
+
+    let rowsR;
+    let totalsR;
+    try {
+      rowsR = await tenantPool.query(queryText, rowsParams);
+      totalsR = await tenantPool.query(totalsText, totalsParams);
+    } catch (err) {
+      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
+        await ensureTenantClientesPaisSchema(tenantPool);
+        rowsR = await tenantPool.query(queryText, rowsParams);
+        totalsR = await tenantPool.query(totalsText, totalsParams);
+      } else {
+        throw err;
+      }
+    }
+
+    const rows = Array.isArray(rowsR?.rows) ? rowsR.rows : [];
+    const totals = totalsR?.rows?.[0] || {
+      ingreso_mensual_total: 0,
+      ingreso_anual_total: 0,
+      ingreso_mensual_cobrado: 0,
+      ingreso_anual_cobrado: 0,
+    };
+
+    const format = String(req.query?.format || "json").toLowerCase();
+    if (format === "csv") {
+      return sendCsvResponse(res, "portfolio_client_contribution_v1.csv", rows, [
+        "id",
+        "pais",
+        "nombre",
+        "apellido",
+        "documento",
+        "telefono",
+        "mail",
+        "linea",
+        "items",
+        "cuota_paga",
+        "ingreso_mensual",
+        "ingreso_anual",
+        "ingreso_mensual_cobrado",
+        "ingreso_anual_cobrado",
+        "pct_cartera_mensual",
+        "pct_cartera_anual",
+      ]);
+    }
+
+    return res.json({
+      status: "success",
+      contract_version: REPORT_CONTRACT_VERSION,
+      from: fromIso,
+      to: toIso,
+      include_all: includeAll,
+      order,
+      limit,
+      paid_only: paidOnly,
+      totals,
       rows,
     });
   } catch (err) {

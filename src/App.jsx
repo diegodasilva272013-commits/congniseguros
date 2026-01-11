@@ -304,6 +304,7 @@ async function request(payload) {
     reportPortfolioLineStatus: { url: "/api/reports/portfolio/line-status", body: rest },
     reportPortfolioExpirations: { url: "/api/reports/portfolio/expirations", body: rest },
     reportPortfolioClientsRevenue: { url: "/api/reports/portfolio/clients-revenue", body: rest },
+    reportPortfolioClientContribution: { url: "/api/reports/portfolio/client-contribution", body: rest },
     setUserPais: { url: "/api/usuarios/set-pais", body: { aseguradora_id: rest.aseguradora_id, pais: rest.pais } },
   };
   
@@ -634,7 +635,10 @@ export default function App() {
   const [reportsErr, setReportsErr] = useState("");
   const [reportsFrom, setReportsFrom] = useState(() => toIsoDateOnly(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)));
   const [reportsTo, setReportsTo] = useState(() => toIsoDateOnly(new Date()));
+  const [reportsLimit, setReportsLimit] = useState(30);
+  const [reportsPaidOnly, setReportsPaidOnly] = useState(false);
   const [reportsMonthly, setReportsMonthly] = useState([]);
+  const [reportsContributionTotals, setReportsContributionTotals] = useState(null);
   const [reportsTop, setReportsTop] = useState([]);
   const [reportsBottom, setReportsBottom] = useState([]);
   const [reportsExp, setReportsExp] = useState([]);
@@ -647,26 +651,32 @@ export default function App() {
       const fromIso = reportsFrom ? new Date(`${reportsFrom}T00:00:00.000Z`).toISOString() : undefined;
       const toIso = reportsTo ? new Date(`${reportsTo}T00:00:00.000Z`).toISOString() : undefined;
 
+      const lim = Number.isFinite(Number(reportsLimit)) ? Math.min(Math.max(Math.floor(Number(reportsLimit)), 1), 200) : 30;
+      const paidOnly = !!reportsPaidOnly;
+
       const [monthly, top, bottom, expirations] = await Promise.all([
         request({ action: "reportFinancialMonthly", aseguradora_id: user.id, from: fromIso, to: toIso }),
         request({
-          action: "reportPortfolioClientsRevenue",
+          action: "reportPortfolioClientContribution",
           aseguradora_id: user.id,
           from: fromIso,
           to: toIso,
-          query: { order: "desc", limit: 10 },
+          include_all: true,
+          query: { order: "desc", limit: lim, paid_only: paidOnly ? "1" : "0" },
         }),
         request({
-          action: "reportPortfolioClientsRevenue",
+          action: "reportPortfolioClientContribution",
           aseguradora_id: user.id,
           from: fromIso,
           to: toIso,
-          query: { order: "asc", limit: 10 },
+          include_all: true,
+          query: { order: "asc", limit: lim, paid_only: paidOnly ? "1" : "0" },
         }),
         request({ action: "reportPortfolioExpirations", aseguradora_id: user.id, days: 30 }),
       ]);
 
       setReportsMonthly(monthly?.rows || []);
+      setReportsContributionTotals(top?.totals || null);
       setReportsTop(top?.rows || []);
       setReportsBottom(bottom?.rows || []);
       setReportsExp(expirations?.rows || []);
@@ -690,6 +700,20 @@ export default function App() {
       pctCobrado: pct,
     };
   }, [reportsMonthly]);
+
+  const reportsContributionKpis = useMemo(() => {
+    const t = reportsContributionTotals || {};
+    const ingresoMensualTotal = Number(t.ingreso_mensual_total || 0);
+    const ingresoMensualCobrado = Number(t.ingreso_mensual_cobrado || 0);
+    const ingresoAnualTotal = Number(t.ingreso_anual_total || 0);
+    const pctCobrado = ingresoMensualTotal > 0 ? (ingresoMensualCobrado / ingresoMensualTotal) * 100 : 0;
+    return {
+      ingresoMensualTotal,
+      ingresoMensualCobrado,
+      ingresoAnualTotal,
+      pctCobrado,
+    };
+  }, [reportsContributionTotals]);
 
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState({ message: "", type: "" });
@@ -4495,6 +4519,28 @@ export default function App() {
                       className="ml-2 px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.10)] text-[var(--text)]"
                     />
                   </label>
+                  <label className="text-xs font-black text-[var(--muted)]">
+                    Top
+                    <input
+                      type="number"
+                      min={1}
+                      max={200}
+                      step={1}
+                      value={reportsLimit}
+                      onChange={(e) => setReportsLimit(e.target.value)}
+                      className="ml-2 px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.10)] text-[var(--text)] w-[92px]"
+                      title="Cantidad de clientes a listar (1 a 200)"
+                    />
+                  </label>
+                  <label className="text-xs font-black text-[var(--muted)] flex items-center gap-2 px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.10)]">
+                    <input
+                      type="checkbox"
+                      checked={reportsPaidOnly}
+                      onChange={(e) => setReportsPaidOnly(e.target.checked)}
+                      className="accent-[var(--c1)]"
+                    />
+                    Solo al día
+                  </label>
                   <button
                     onClick={loadReports}
                     className="px-4 py-3 rounded-2xl bg-[rgba(63,209,255,.14)] border border-[rgba(63,209,255,.32)] shadow-sm text-xs font-black text-[var(--text)] hover:bg-[rgba(63,209,255,.20)] flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -4523,24 +4569,24 @@ export default function App() {
                   <div className="text-2xl font-black text-[var(--text)]">{Number(reportsKpis.clientes || 0)}</div>
                 </div>
                 <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
-                  <div className="text-xs font-black text-[var(--muted)]">Monto total</div>
-                  <div className="text-2xl font-black text-[var(--text)]">{Number(reportsKpis.montoTotal || 0).toFixed(2)}</div>
+                  <div className="text-xs font-black text-[var(--muted)]">Ingreso mensual (cartera)</div>
+                  <div className="text-2xl font-black text-[var(--text)]">{Number(reportsContributionKpis.ingresoMensualTotal || 0).toFixed(2)}</div>
                 </div>
                 <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
-                  <div className="text-xs font-black text-[var(--muted)]">Monto cobrado</div>
-                  <div className="text-2xl font-black text-[var(--text)]">{Number(reportsKpis.montoCobrado || 0).toFixed(2)}</div>
+                  <div className="text-xs font-black text-[var(--muted)]">Ingreso anual (proy.)</div>
+                  <div className="text-2xl font-black text-[var(--text)]">{Number(reportsContributionKpis.ingresoAnualTotal || 0).toFixed(2)}</div>
                 </div>
                 <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
                   <div className="text-xs font-black text-[var(--muted)]">% cobrado</div>
-                  <div className="text-2xl font-black text-[var(--text)]">{Number(reportsKpis.pctCobrado || 0).toFixed(1)}%</div>
+                  <div className="text-2xl font-black text-[var(--text)]">{Number(reportsContributionKpis.pctCobrado || 0).toFixed(1)}%</div>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
                 <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
                   <div className="flex items-center justify-between mb-3">
-                    <div className="text-lg font-black text-[var(--text)]">Top clientes (monto total)</div>
-                    <div className="text-xs font-black text-[var(--muted)]">Top 10</div>
+                    <div className="text-lg font-black text-[var(--text)]">Top clientes (contribución)</div>
+                    <div className="text-xs font-black text-[var(--muted)]">Top {Number(reportsLimit) || 30}</div>
                   </div>
                   <div className="overflow-auto">
                     <table className="min-w-full text-sm">
@@ -4549,7 +4595,9 @@ export default function App() {
                           <th className="py-2 pr-3">Cliente</th>
                           <th className="py-2 pr-3">Doc</th>
                           <th className="py-2 pr-3">Línea</th>
-                          <th className="py-2 text-right">Monto</th>
+                          <th className="py-2 text-right">Mensual</th>
+                          <th className="py-2 text-right">Anual</th>
+                          <th className="py-2 text-right">% cartera</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -4561,13 +4609,19 @@ export default function App() {
                             <td className="py-2 pr-3 text-[var(--muted)]">{r.documento || ""}</td>
                             <td className="py-2 pr-3 text-[var(--muted)]">{r.linea || ""}</td>
                             <td className="py-2 text-right font-black text-[var(--text)]">
-                              {Number(r.monto_total || 0).toFixed(2)}
+                              {Number(r.ingreso_mensual || 0).toFixed(2)}
+                            </td>
+                            <td className="py-2 text-right font-black text-[var(--text)]">
+                              {Number(r.ingreso_anual || 0).toFixed(2)}
+                            </td>
+                            <td className="py-2 text-right font-black text-[var(--text)]">
+                              {Number(r.pct_cartera_mensual || 0).toFixed(2)}%
                             </td>
                           </tr>
                         ))}
                         {!reportsTop?.length && !reportsBusy ? (
                           <tr>
-                            <td colSpan={4} className="py-3 text-[var(--muted)]">
+                            <td colSpan={6} className="py-3 text-[var(--muted)]">
                               Sin datos para el período.
                             </td>
                           </tr>
@@ -4580,7 +4634,7 @@ export default function App() {
                 <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
                   <div className="flex items-center justify-between mb-3">
                     <div className="text-lg font-black text-[var(--text)]">Clientes con menos ingresos</div>
-                    <div className="text-xs font-black text-[var(--muted)]">Bottom 10</div>
+                    <div className="text-xs font-black text-[var(--muted)]">Bottom {Number(reportsLimit) || 30}</div>
                   </div>
                   <div className="overflow-auto">
                     <table className="min-w-full text-sm">
@@ -4589,7 +4643,9 @@ export default function App() {
                           <th className="py-2 pr-3">Cliente</th>
                           <th className="py-2 pr-3">Doc</th>
                           <th className="py-2 pr-3">Línea</th>
-                          <th className="py-2 text-right">Monto</th>
+                          <th className="py-2 text-right">Mensual</th>
+                          <th className="py-2 text-right">Anual</th>
+                          <th className="py-2 text-right">% cartera</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -4601,13 +4657,19 @@ export default function App() {
                             <td className="py-2 pr-3 text-[var(--muted)]">{r.documento || ""}</td>
                             <td className="py-2 pr-3 text-[var(--muted)]">{r.linea || ""}</td>
                             <td className="py-2 text-right font-black text-[var(--text)]">
-                              {Number(r.monto_total || 0).toFixed(2)}
+                              {Number(r.ingreso_mensual || 0).toFixed(2)}
+                            </td>
+                            <td className="py-2 text-right font-black text-[var(--text)]">
+                              {Number(r.ingreso_anual || 0).toFixed(2)}
+                            </td>
+                            <td className="py-2 text-right font-black text-[var(--text)]">
+                              {Number(r.pct_cartera_mensual || 0).toFixed(2)}%
                             </td>
                           </tr>
                         ))}
                         {!reportsBottom?.length && !reportsBusy ? (
                           <tr>
-                            <td colSpan={4} className="py-3 text-[var(--muted)]">
+                            <td colSpan={6} className="py-3 text-[var(--muted)]">
                               Sin datos para el período.
                             </td>
                           </tr>

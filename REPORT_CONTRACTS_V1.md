@@ -141,6 +141,77 @@ Ordena clientes por ingresos estimados en el rango `from/to`.
 }
 ```
 
+---
+
+## 5) Client Contribution (Monthly + Annual)
+**Endpoint:** `POST /api/reports/portfolio/client-contribution?order=desc|asc&limit=30&paid_only=0|1&format=csv|json`
+
+Reporte “contable” **estimado** basado en la cartera actual:
+- `ingreso_mensual` se calcula desde `clientes.monto` (asumido como ingreso mensual por cliente).
+- `ingreso_anual = ingreso_mensual * 12`.
+- `%_cartera` se calcula contra el total del período (mensual/anual).
+
+Notas importantes:
+- Si querés contabilidad 100% real (ingresos por fecha), hace falta una tabla de **movimientos/pagos de clientes** (ledger). Este reporte es una proyección útil para gestión.
+
+**Query params:**
+- `order=desc` (default) → mejores clientes
+- `order=asc` → clientes más chicos
+- `limit` opcional (default 30, max 200)
+- `paid_only=1` para considerar solo clientes con `cuota_paga=SI`
+
+**Input (JSON):**
+```json
+{
+  "aseguradora_id": "<uuid|number>",
+  "from": "2025-01-01T00:00:00.000Z",
+  "to": "2026-01-01T00:00:00.000Z",
+  "include_all": true
+}
+```
+- `include_all` (default true): ignora `from/to` y calcula sobre la cartera completa.
+- Si `include_all=false`, filtra por `fecha_alta` dentro de `from/to` (útil para snapshots históricos).
+
+**Output (JSON):**
+```json
+{
+  "status": "success",
+  "contract_version": "v1",
+  "from": "...",
+  "to": "...",
+  "include_all": true,
+  "order": "desc",
+  "limit": 30,
+  "paid_only": false,
+  "totals": {
+    "ingreso_mensual_total": 12345.67,
+    "ingreso_anual_total": 148148.04,
+    "ingreso_mensual_cobrado": 9000.00,
+    "ingreso_anual_cobrado": 108000.00
+  },
+  "rows": [
+    {
+      "id": 123,
+      "pais": "AR",
+      "nombre": "...",
+      "apellido": "...",
+      "documento": "...",
+      "telefono": "...",
+      "mail": "...",
+      "linea": "AUTO|VIDA|OTRO",
+      "items": 1,
+      "cuota_paga": "SI|NO|",
+      "ingreso_mensual": 100.00,
+      "ingreso_anual": 1200.00,
+      "ingreso_mensual_cobrado": 100.00,
+      "ingreso_anual_cobrado": 1200.00,
+      "pct_cartera_mensual": 0.81,
+      "pct_cartera_anual": 0.81
+    }
+  ]
+}
+```
+
 **Output (JSON):**
 ```json
 {
