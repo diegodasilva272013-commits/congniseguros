@@ -273,16 +273,45 @@ BEGIN
   END IF;
 END $$;
 
+-- Detectar tipo real de suscripciones.id en instalaciones legacy (puede ser INT/SERIAL)
+-- y guardarlo en una setting para reusar en pagos.
+DO $$
+DECLARE
+  suscripciones_id_type TEXT;
+BEGIN
+  IF to_regclass('suscripciones') IS NULL THEN
+    suscripciones_id_type := 'uuid';
+  ELSE
+    SELECT format_type(a.atttypid, a.atttypmod)
+    INTO suscripciones_id_type
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'suscripciones'
+      AND a.attname = 'id'
+      AND a.attnum > 0
+      AND NOT a.attisdropped;
+
+    IF suscripciones_id_type IS NULL OR suscripciones_id_type = '' THEN
+      suscripciones_id_type := 'uuid';
+    END IF;
+  END IF;
+
+  PERFORM set_config('cogniseguros.suscripciones_id_type', suscripciones_id_type, true);
+END $$;
+
 DO $$
 DECLARE
   usuarios_id_type TEXT := COALESCE(current_setting('cogniseguros.usuarios_id_type', true), 'uuid');
+  suscripciones_id_type TEXT := COALESCE(current_setting('cogniseguros.suscripciones_id_type', true), 'uuid');
 BEGIN
   IF to_regclass('pagos') IS NULL THEN
     EXECUTE format($SQL$
       CREATE TABLE pagos (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         aseguradora_id %s NOT NULL,
-        suscripcion_id UUID REFERENCES suscripciones(id),
+        suscripcion_id %s,
         monto DECIMAL(10, 2) NOT NULL,
         moneda VARCHAR(3) DEFAULT 'USD',
         concepto VARCHAR(255),
@@ -293,7 +322,7 @@ BEGIN
         fecha_pago TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
-    $SQL$, usuarios_id_type);
+    $SQL$, usuarios_id_type, suscripciones_id_type);
   END IF;
 
   IF to_regclass('pagos') IS NOT NULL AND NOT EXISTS (
@@ -304,6 +333,18 @@ BEGIN
     EXCEPTION
       WHEN others THEN
         RAISE NOTICE 'Skipping FK pagos -> usuarios(id): %', SQLERRM;
+    END;
+  END IF;
+
+  -- FK a suscripciones(id): best-effort (puede fallar si suscripciones.id es legacy o hay data inconsistent)
+  IF to_regclass('pagos') IS NOT NULL
+     AND to_regclass('suscripciones') IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pagos_suscripcion_id_fkey') THEN
+    BEGIN
+      EXECUTE 'ALTER TABLE pagos ADD CONSTRAINT pagos_suscripcion_id_fkey FOREIGN KEY (suscripcion_id) REFERENCES suscripciones(id)';
+    EXCEPTION
+      WHEN others THEN
+        RAISE NOTICE 'Skipping FK pagos(suscripcion_id) -> suscripciones(id): %', SQLERRM;
     END;
   END IF;
 END $$;
