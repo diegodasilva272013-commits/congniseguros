@@ -333,6 +333,28 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[migrate] Fatal:", err?.message || err);
+  const message = err?.message || err;
+  console.error("[migrate] Fatal:", message);
+
+  // Helpful Postgres details (when available)
+  if (err && typeof err === "object") {
+    const details = {
+      code: err.code,
+      detail: err.detail,
+      hint: err.hint,
+      where: err.where,
+      schema: err.schema,
+      table: err.table,
+      column: err.column,
+      constraint: err.constraint,
+      routine: err.routine,
+    };
+
+    for (const [key, value] of Object.entries(details)) {
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        console.error(`[migrate] ${key}:`, value);
+      }
+    }
+  }
   process.exit(1);
 });
