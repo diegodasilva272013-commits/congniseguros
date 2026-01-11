@@ -32,6 +32,7 @@ import {
   X,
   Settings,
   Clock,
+  BarChart3,
   Sparkles,
   ChevronLeft,
   Copy,
@@ -257,7 +258,7 @@ const openSupport = () => {
 };
 
 async function request(payload) {
-  const { action, ...rest } = payload;
+  const { action, query, ...rest } = payload;
   
   // Mapeo de acciones a endpoints
   const endpointMap = {
@@ -299,11 +300,26 @@ async function request(payload) {
       url: "/api/marketing/social-script",
       body: { aseguradora_id: rest.aseguradora_id, idea: rest.idea, avatar: rest.avatar },
     },
+    reportFinancialMonthly: { url: "/api/reports/financial/monthly", body: rest },
+    reportPortfolioLineStatus: { url: "/api/reports/portfolio/line-status", body: rest },
+    reportPortfolioExpirations: { url: "/api/reports/portfolio/expirations", body: rest },
+    reportPortfolioClientsRevenue: { url: "/api/reports/portfolio/clients-revenue", body: rest },
     setUserPais: { url: "/api/usuarios/set-pais", body: { aseguradora_id: rest.aseguradora_id, pais: rest.pais } },
   };
   
   const endpoint = endpointMap[action];
   if (!endpoint) throw new Error(`Acción no soportada: ${action}`);
+
+  let url = endpoint.url;
+  if (query && typeof query === "object") {
+    const sp = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+      if (v === undefined || v === null || v === "") continue;
+      sp.set(String(k), String(v));
+    }
+    const qs = sp.toString();
+    if (qs) url = `${url}?${qs}`;
+  }
 
   const token = (() => {
     try {
@@ -316,7 +332,7 @@ async function request(payload) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(endpoint.url, {
+  const res = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify(endpoint.body),
@@ -335,6 +351,19 @@ async function request(payload) {
   }
   return data;
 }
+
+const toIsoDateOnly = (d) => {
+  try {
+    const dt = d instanceof Date ? d : new Date(d);
+    if (Number.isNaN(dt.getTime())) return "";
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, "0");
+    const day = String(dt.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  } catch {
+    return "";
+  }
+};
 
 // ✅ NUEVO: normalizar monto (front)
 const normalizeMonto = (v) => {
@@ -599,6 +628,68 @@ export default function App() {
   const [authPais, setAuthPais] = useState("AR");
   // ✅ NUEVO: pagos
   const [menu, setMenu] = useState("cartera"); // cartera | vencimientos | pagos | mensajes | config | marketing | perfil
+
+  // ===== REPORTES (Sprint 2) =====
+  const [reportsBusy, setReportsBusy] = useState(false);
+  const [reportsErr, setReportsErr] = useState("");
+  const [reportsFrom, setReportsFrom] = useState(() => toIsoDateOnly(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)));
+  const [reportsTo, setReportsTo] = useState(() => toIsoDateOnly(new Date()));
+  const [reportsMonthly, setReportsMonthly] = useState([]);
+  const [reportsTop, setReportsTop] = useState([]);
+  const [reportsBottom, setReportsBottom] = useState([]);
+  const [reportsExp, setReportsExp] = useState([]);
+
+  const loadReports = async () => {
+    if (!user?.id) return;
+    setReportsErr("");
+    setReportsBusy(true);
+    try {
+      const fromIso = reportsFrom ? new Date(`${reportsFrom}T00:00:00.000Z`).toISOString() : undefined;
+      const toIso = reportsTo ? new Date(`${reportsTo}T00:00:00.000Z`).toISOString() : undefined;
+
+      const [monthly, top, bottom, expirations] = await Promise.all([
+        request({ action: "reportFinancialMonthly", aseguradora_id: user.id, from: fromIso, to: toIso }),
+        request({
+          action: "reportPortfolioClientsRevenue",
+          aseguradora_id: user.id,
+          from: fromIso,
+          to: toIso,
+          query: { order: "desc", limit: 10 },
+        }),
+        request({
+          action: "reportPortfolioClientsRevenue",
+          aseguradora_id: user.id,
+          from: fromIso,
+          to: toIso,
+          query: { order: "asc", limit: 10 },
+        }),
+        request({ action: "reportPortfolioExpirations", aseguradora_id: user.id, days: 30 }),
+      ]);
+
+      setReportsMonthly(monthly?.rows || []);
+      setReportsTop(top?.rows || []);
+      setReportsBottom(bottom?.rows || []);
+      setReportsExp(expirations?.rows || []);
+    } catch (e) {
+      setReportsErr(String(e?.message || e || "Error cargando reportes"));
+    } finally {
+      setReportsBusy(false);
+    }
+  };
+
+  const reportsKpis = useMemo(() => {
+    const rows = Array.isArray(reportsMonthly) ? reportsMonthly : [];
+    const montoTotal = rows.reduce((acc, r) => acc + Number(r?.monto_total || 0), 0);
+    const montoCobrado = rows.reduce((acc, r) => acc + Number(r?.monto_cobrado || 0), 0);
+    const clientes = rows.reduce((acc, r) => acc + Number(r?.clientes || 0), 0);
+    const pct = montoTotal > 0 ? (montoCobrado / montoTotal) * 100 : 0;
+    return {
+      clientes,
+      montoTotal,
+      montoCobrado,
+      pctCobrado: pct,
+    };
+  }, [reportsMonthly]);
 
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState({ message: "", type: "" });
@@ -4178,6 +4269,23 @@ export default function App() {
             />
 
             <MenuBtn
+              active={menu === "reportes"}
+              icon={<BarChart3 size={16} />}
+              label="Reportes"
+              onClick={() => {
+                setMenu("reportes");
+                // carga lazy
+                setTimeout(() => {
+                  try {
+                    loadReports();
+                  } catch {
+                    // ignore
+                  }
+                }, 0);
+              }}
+            />
+
+            <MenuBtn
               active={menu === "mensajes"}
               icon={<MessageCircle size={16} />}
               label="Mensajes"
@@ -4357,6 +4465,196 @@ export default function App() {
                 onEdit={openEditClient}
                 onDelete={openDeleteModal}
               />
+            </>
+          )}
+
+          {/* REPORTES */}
+          {menu === "reportes" && (
+            <>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+                <h2 className="text-2xl sm:text-3xl font-black text-[var(--text)] flex items-center gap-2">
+                  <BarChart3 size={22} className="text-[var(--c1)]" /> Reportes
+                </h2>
+
+                <div className="flex gap-3 flex-wrap justify-end items-end">
+                  <label className="text-xs font-black text-[var(--muted)]">
+                    Desde
+                    <input
+                      type="date"
+                      value={reportsFrom}
+                      onChange={(e) => setReportsFrom(e.target.value)}
+                      className="ml-2 px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.10)] text-[var(--text)]"
+                    />
+                  </label>
+                  <label className="text-xs font-black text-[var(--muted)]">
+                    Hasta
+                    <input
+                      type="date"
+                      value={reportsTo}
+                      onChange={(e) => setReportsTo(e.target.value)}
+                      className="ml-2 px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.10)] text-[var(--text)]"
+                    />
+                  </label>
+                  <button
+                    onClick={loadReports}
+                    className="px-4 py-3 rounded-2xl bg-[rgba(63,209,255,.14)] border border-[rgba(63,209,255,.32)] shadow-sm text-xs font-black text-[var(--text)] hover:bg-[rgba(63,209,255,.20)] flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                    disabled={reportsBusy}
+                  >
+                    {reportsBusy ? (
+                      <Loader2 className="animate-spin text-[var(--c1)]" size={16} />
+                    ) : (
+                      <RefreshCcw size={16} className="text-[var(--c1)]" />
+                    )}
+                    Actualizar
+                  </button>
+                </div>
+              </div>
+
+              {reportsErr ? (
+                <div className="mb-6 p-4 rounded-2xl border border-[rgba(255,107,107,.35)] bg-[rgba(255,107,107,.10)] text-[var(--text)] text-sm">
+                  <div className="font-black mb-1">Error</div>
+                  <div className="opacity-90">{reportsErr}</div>
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
+                <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
+                  <div className="text-xs font-black text-[var(--muted)]">Clientes (alta en período)</div>
+                  <div className="text-2xl font-black text-[var(--text)]">{Number(reportsKpis.clientes || 0)}</div>
+                </div>
+                <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
+                  <div className="text-xs font-black text-[var(--muted)]">Monto total</div>
+                  <div className="text-2xl font-black text-[var(--text)]">{Number(reportsKpis.montoTotal || 0).toFixed(2)}</div>
+                </div>
+                <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
+                  <div className="text-xs font-black text-[var(--muted)]">Monto cobrado</div>
+                  <div className="text-2xl font-black text-[var(--text)]">{Number(reportsKpis.montoCobrado || 0).toFixed(2)}</div>
+                </div>
+                <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
+                  <div className="text-xs font-black text-[var(--muted)]">% cobrado</div>
+                  <div className="text-2xl font-black text-[var(--text)]">{Number(reportsKpis.pctCobrado || 0).toFixed(1)}%</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-lg font-black text-[var(--text)]">Top clientes (monto total)</div>
+                    <div className="text-xs font-black text-[var(--muted)]">Top 10</div>
+                  </div>
+                  <div className="overflow-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-[var(--muted)]">
+                          <th className="py-2 pr-3">Cliente</th>
+                          <th className="py-2 pr-3">Doc</th>
+                          <th className="py-2 pr-3">Línea</th>
+                          <th className="py-2 text-right">Monto</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(reportsTop || []).map((r) => (
+                          <tr key={`top-${r.id}-${r.documento}`} className="border-t border-[rgba(255,255,255,.08)]">
+                            <td className="py-2 pr-3 font-black text-[var(--text)]">
+                              {String(r.nombre || "").trim()} {String(r.apellido || "").trim()}
+                            </td>
+                            <td className="py-2 pr-3 text-[var(--muted)]">{r.documento || ""}</td>
+                            <td className="py-2 pr-3 text-[var(--muted)]">{r.linea || ""}</td>
+                            <td className="py-2 text-right font-black text-[var(--text)]">
+                              {Number(r.monto_total || 0).toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                        {!reportsTop?.length && !reportsBusy ? (
+                          <tr>
+                            <td colSpan={4} className="py-3 text-[var(--muted)]">
+                              Sin datos para el período.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-lg font-black text-[var(--text)]">Clientes con menos ingresos</div>
+                    <div className="text-xs font-black text-[var(--muted)]">Bottom 10</div>
+                  </div>
+                  <div className="overflow-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-[var(--muted)]">
+                          <th className="py-2 pr-3">Cliente</th>
+                          <th className="py-2 pr-3">Doc</th>
+                          <th className="py-2 pr-3">Línea</th>
+                          <th className="py-2 text-right">Monto</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(reportsBottom || []).map((r) => (
+                          <tr key={`bot-${r.id}-${r.documento}`} className="border-t border-[rgba(255,255,255,.08)]">
+                            <td className="py-2 pr-3 font-black text-[var(--text)]">
+                              {String(r.nombre || "").trim()} {String(r.apellido || "").trim()}
+                            </td>
+                            <td className="py-2 pr-3 text-[var(--muted)]">{r.documento || ""}</td>
+                            <td className="py-2 pr-3 text-[var(--muted)]">{r.linea || ""}</td>
+                            <td className="py-2 text-right font-black text-[var(--text)]">
+                              {Number(r.monto_total || 0).toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                        {!reportsBottom?.length && !reportsBusy ? (
+                          <tr>
+                            <td colSpan={4} className="py-3 text-[var(--muted)]">
+                              Sin datos para el período.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-5 rounded-3xl bg-[var(--panel)] border border-[rgba(255,255,255,.10)]">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-lg font-black text-[var(--text)]">Vencimientos próximos</div>
+                  <div className="text-xs font-black text-[var(--muted)]">Próximos 30 días</div>
+                </div>
+                <div className="overflow-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-[var(--muted)]">
+                        <th className="py-2 pr-3">Cliente</th>
+                        <th className="py-2 pr-3">Doc</th>
+                        <th className="py-2 pr-3">Fecha fin</th>
+                        <th className="py-2 text-right">Días</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(reportsExp || []).slice(0, 20).map((r) => (
+                        <tr key={`exp-${r.id}`} className="border-t border-[rgba(255,255,255,.08)]">
+                          <td className="py-2 pr-3 font-black text-[var(--text)]">
+                            {String(r.nombre || "").trim()} {String(r.apellido || "").trim()}
+                          </td>
+                          <td className="py-2 pr-3 text-[var(--muted)]">{r.documento || ""}</td>
+                          <td className="py-2 pr-3 text-[var(--muted)]">{r.fecha_fin || ""}</td>
+                          <td className="py-2 text-right font-black text-[var(--text)]">{r.days_left ?? ""}</td>
+                        </tr>
+                      ))}
+                      {!reportsExp?.length && !reportsBusy ? (
+                        <tr>
+                          <td colSpan={4} className="py-3 text-[var(--muted)]">
+                            Sin vencimientos (o fechas no cargadas en formato ISO).
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </>
           )}
 

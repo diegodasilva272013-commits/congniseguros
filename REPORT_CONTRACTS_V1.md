@@ -121,3 +121,49 @@ Objetivo: contratos estables y auditables para que el backend entregue JSON dete
 ```
 
 Nota: `fecha_fin` solo se calcula cuando `fecha_fin_str` es ISO (`YYYY-MM-DD...`).
+
+---
+
+## 4) Clients Revenue Ranking (Top/Bottom)
+**Endpoint:** `POST /api/reports/portfolio/clients-revenue?order=desc|asc&limit=20&format=csv|json`
+
+Ordena clientes por ingresos estimados en el rango `from/to`.
+- `order=desc` (default) → “top clientes”
+- `order=asc` → “clientes con menos ingresos”
+- `limit` opcional (default 20, max 200)
+
+**Input (JSON):**
+```json
+{
+  "aseguradora_id": "<uuid|number>",
+  "from": "2025-01-01T00:00:00.000Z",
+  "to": "2026-01-01T00:00:00.000Z"
+}
+```
+
+**Output (JSON):**
+```json
+{
+  "status": "success",
+  "contract_version": "v1",
+  "from": "...",
+  "to": "...",
+  "order": "desc",
+  "limit": 20,
+  "rows": [
+    {
+      "id": 123,
+      "pais": "AR",
+      "nombre": "...",
+      "apellido": "...",
+      "documento": "...",
+      "telefono": "...",
+      "mail": "...",
+      "linea": "AUTO|VIDA|OTRO",
+      "items": 1,
+      "monto_total": 1234.56,
+      "monto_cobrado": 800.00
+    }
+  ]
+}
+```

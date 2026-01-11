@@ -3009,6 +3009,122 @@ app.post("/api/reports/portfolio/expirations", async (req, res) => {
   }
 });
 
+app.post("/api/reports/portfolio/clients-revenue", async (req, res) => {
+  try {
+    const aseguradoraId = req.body?.aseguradora_id;
+    if (!aseguradoraId) return res.status(400).json({ status: "error", message: "aseguradora_id requerido" });
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    if (!canAccessAseguradora(req, aseguradoraId)) {
+      return res.status(401).json({ status: "error", message: "No autorizado" });
+    }
+
+    const to = parseDateFromReq(req.body?.to) || new Date();
+    const from = parseDateFromReq(req.body?.from) || new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    const fromIso = toIsoOrNull(from);
+    const toIso = toIsoOrNull(to);
+    if (!fromIso || !toIso) return res.status(400).json({ status: "error", message: "from/to inválidos" });
+
+    const orderRaw = String(req.query?.order || "desc").trim().toLowerCase();
+    const order = orderRaw === "asc" ? "asc" : "desc";
+    const limitRaw = Number(req.query?.limit ?? 20);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.floor(limitRaw), 1), 200) : 20;
+
+    const tenantPool = await getTenantPoolFromReq({ ...req, body: { ...(req.body || {}), aseguradora_id: aseguradoraId } });
+    const allowedPaises = await getAllowedPaisesForAseguradoraId(aseguradoraId);
+
+    const lineaExpr = `
+      CASE
+        WHEN (LOWER(COALESCE(descripcion_seguro,'')) || ' ' || LOWER(COALESCE(polizas,''))) ~ '(\\bauto\\b|veh[ií]c|\\bcar\\b|\\bcoche\\b|\\bmoto\\b|\\bpatente\\b)' THEN 'AUTO'
+        WHEN (LOWER(COALESCE(descripcion_seguro,'')) || ' ' || LOWER(COALESCE(polizas,''))) ~ '(\\bvida\\b|fallec|benefici|\\binvalidez\\b)' THEN 'VIDA'
+        ELSE 'OTRO'
+      END
+    `;
+
+    let r;
+    const queryText = `
+      WITH base AS (
+        SELECT
+          id,
+          pais,
+          COALESCE(nombre,'') AS nombre,
+          COALESCE(apellido,'') AS apellido,
+          COALESCE(documento,'') AS documento,
+          COALESCE(telefono,'') AS telefono,
+          COALESCE(mail,'') AS mail,
+          ${lineaExpr} AS linea,
+          COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
+          COALESCE(monto, 0)::numeric(14,2) AS monto
+        FROM clientes
+        WHERE pais = ANY($1::text[])
+          AND fecha_alta IS NOT NULL
+          AND fecha_alta >= $2::timestamptz
+          AND fecha_alta < $3::timestamptz
+      )
+      SELECT
+        MIN(id)::int AS id,
+        MAX(pais) AS pais,
+        MAX(nombre) AS nombre,
+        MAX(apellido) AS apellido,
+        doc_key AS documento,
+        MAX(telefono) AS telefono,
+        MAX(mail) AS mail,
+        MAX(linea) AS linea,
+        COUNT(*)::int AS items,
+        COALESCE(SUM(monto), 0)::numeric(14,2) AS monto_total,
+        COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN monto ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
+      FROM (
+        SELECT *, COALESCE(NULLIF(TRIM(documento), ''), id::text) AS doc_key
+        FROM base
+      ) t
+      GROUP BY doc_key
+      ORDER BY monto_total ${order}, id ASC
+      LIMIT $4::int
+    `;
+
+    try {
+      r = await tenantPool.query(queryText, [allowedPaises, fromIso, toIso, limit]);
+    } catch (err) {
+      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
+        await ensureTenantClientesPaisSchema(tenantPool);
+        r = await tenantPool.query(queryText, [allowedPaises, fromIso, toIso, limit]);
+      } else {
+        throw err;
+      }
+    }
+
+    const rows = Array.isArray(r.rows) ? r.rows : [];
+    const format = String(req.query?.format || "json").toLowerCase();
+    if (format === "csv") {
+      return sendCsvResponse(res, "portfolio_clients_revenue_v1.csv", rows, [
+        "id",
+        "pais",
+        "nombre",
+        "apellido",
+        "documento",
+        "telefono",
+        "mail",
+        "linea",
+        "items",
+        "monto_total",
+        "monto_cobrado",
+      ]);
+    }
+
+    return res.json({
+      status: "success",
+      contract_version: REPORT_CONTRACT_VERSION,
+      from: fromIso,
+      to: toIso,
+      order,
+      limit,
+      rows,
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err?.message || String(err) });
+  }
+});
+
 // ===== AUTH: LOGIN PASO 1 (email/password) =====
 app.post("/api/auth/login", async (req, res) => {
   try {
