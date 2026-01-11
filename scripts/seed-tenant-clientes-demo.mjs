@@ -1,5 +1,7 @@
 import "dotenv/config";
 import pkg from "pg";
+import fs from "fs";
+import path from "path";
 
 const { Pool } = pkg;
 
@@ -10,9 +12,6 @@ const count = Number(countArg || 300);
 const reset = process.argv.includes("--reset");
 const wipeDemo = process.argv.includes("--wipe-demo");
 
-if (!Number.isFinite(aseguradoraId)) {
-  // placeholder: aseguradoraId se resuelve abajo (email o UUID)
-}
 if (!Number.isFinite(count) || count <= 0) {
   console.error("Invalid count. Must be a positive number.");
   process.exit(1);
@@ -26,6 +25,7 @@ const cfg = {
 };
 
 const masterDb = process.env.DB_NAME || "cogniseguros";
+const adminDb = process.env.DB_ADMIN_DB || "postgres";
 const master = new Pool({ ...cfg, database: masterDb });
 
 const today = new Date();
@@ -58,26 +58,77 @@ if (idOrEmail.includes("@")) {
   }
 } else if (uuidRe.test(idOrEmail)) {
   aseguradoraId = idOrEmail;
+} else if (/^\d+$/.test(idOrEmail)) {
+  aseguradoraId = idOrEmail;
 } else {
-  console.error("Identificador inválido. Pasá un UUID o un email. Recibido:", idOrEmail);
+  console.error("Identificador inválido. Pasá un UUID, un ID numérico o un email. Recibido:", idOrEmail);
   process.exit(1);
 }
 
-const r = await master.query("SELECT tenant_db FROM usuarios WHERE id = $1", [aseguradoraId]);
-const tenantDb = (r.rows[0]?.tenant_db || "").trim() || getTenantDbNameForUserId(aseguradoraId);
+const r2 = await master.query("SELECT tenant_db FROM usuarios WHERE id::text = $1 LIMIT 1", [aseguradoraId]);
+const tenantDb = (r2.rows[0]?.tenant_db || "").trim() || getTenantDbNameForUserId(aseguradoraId);
 
 console.log("aseguradoraId:", aseguradoraId);
 console.log("tenantDb:", tenantDb);
 console.log("count:", count);
 console.log("docPrefix:", docPrefix);
 
+const ensureTenantDbExists = async () => {
+  const admin = new Pool({ ...cfg, database: adminDb });
+  try {
+    const exists = await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", [tenantDb]);
+    if (exists.rows.length === 0) {
+      const safeDbName = String(tenantDb).replace(/"/g, '""');
+      await admin.query(`CREATE DATABASE "${safeDbName}"`);
+      console.log("tenant_db_created:", tenantDb);
+    }
+  } finally {
+    await admin.end();
+  }
+};
+
+await ensureTenantDbExists();
+
 const tenant = new Pool({ ...cfg, database: tenantDb });
+
+const loadTenantSchemaSql = () => {
+  try {
+    const schemaPath = path.resolve(process.cwd(), "tenant-schema.sql");
+    return fs.readFileSync(schemaPath, "utf8");
+  } catch {
+    return `
+      CREATE TABLE IF NOT EXISTS clientes (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        fecha_alta TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        pais VARCHAR(2) DEFAULT 'AR',
+        nombre VARCHAR(255) NOT NULL,
+        apellido VARCHAR(255),
+        mail VARCHAR(255),
+        telefono VARCHAR(20),
+        documento VARCHAR(20),
+        polizas TEXT,
+        descripcion_seguro TEXT,
+        fecha_inicio_str VARCHAR(50),
+        fecha_fin_str VARCHAR(50),
+        fechas_de_cuota TEXT,
+        cuota_paga VARCHAR(10) DEFAULT 'NO',
+        monto DECIMAL(10, 2),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+  }
+};
 
 const ensureTenantClientesSchema = async () => {
   await tenant.query("BEGIN");
   try {
-    // Ensure base table exists
-    await tenant.query("SELECT 1 FROM clientes LIMIT 1");
+    // Ensure base schema exists
+    try {
+      await tenant.query("SELECT 1 FROM clientes LIMIT 1");
+    } catch {
+      const schemaSql = loadTenantSchemaSql();
+      await tenant.query(schemaSql);
+    }
 
     // Ensure pais column + unique index used by the app
     await tenant.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS pais VARCHAR(2) DEFAULT 'AR'");

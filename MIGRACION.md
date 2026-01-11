@@ -1,15 +1,17 @@
-# 🚀 Migración: Google Sheets → PostgreSQL + Node.js
+# 🚀 Migraciones: PostgreSQL (enterprise) + Node.js
 
-## ✅ Que incluye esta migración
+## ✅ Qué incluye
 
 - ✅ Backend Node.js/Express con todas las rutas del Google Script
 - ✅ PostgreSQL como base de datos
 - ✅ Autenticación con bcrypt (contraseñas hasheadas)
 - ✅ WhatsApp Cloud API (seguro en backend)
 - ✅ OpenAI integration (copy + imágenes)
-- ✅ Sin perder ningun dato
+- ✅ Sin perder datos (migraciones idempotentes)
+- ✅ Migraciones versionadas con auditoría (`schema_migrations`)
+- ✅ Soporte multi-tenant (opcional) para aplicar migraciones a DBs de tenants
 
-## 📋 Pasos de instalación
+## 📋 Pasos
 
 ### 1. Instalar PostgreSQL (si no lo tienes)
 
@@ -69,16 +71,28 @@ PORT=5000
 npm install
 ```
 
-### 5. Migración de datos
+### 5. Setup inicial (solo si necesitas crear DB/tablas base)
+
+Si estás armando un entorno desde cero en local/dev:
+
+```bash
+npm run setup-db
+```
+
+Esto crea DB y tablas base de forma idempotente.
+
+### 6. Migraciones versionadas (recomendado)
 
 ```bash
 npm run migrate
 ```
 
-Esto va a:
-1. ✅ Crear todas las tablas en PostgreSQL
-2. ✅ Crear un usuario de prueba
-3. ✅ Preparar para importar datos desde CSV (si los exportas desde Google)
+Esto aplica scripts SQL en `/migrations` y registra auditoría en `schema_migrations`.
+
+Opciones:
+- `npm run migrate -- --dry-run` (no ejecuta, solo imprime)
+- `npm run migrate -- --baseline` (marca como aplicadas sin ejecutar)
+- `npm run migrate -- --tenants` (aplica migraciones con `-- scope: tenant` en las DBs tenant)
 
 ### 6. Ejecutar backend + frontend
 
@@ -94,9 +108,9 @@ Esto levanta:
 
 ### Opción A: Exportar a CSV (manual, más fácil)
 
-1. Abri tu Google Sheet
+1. Abrí tu Google Sheet
 2. File → Download → CSV
-3. En terminal: `npm run migrate`
+3. En terminal: usá tu script de importación (a definir) o cargá CSV desde la UI
 4. Pasá la ruta del CSV cuando te pida
 
 ### Opción B: Script automático (avanzado)
@@ -104,7 +118,7 @@ Esto levanta:
 Si queres automatizar la exportación desde Google:
 
 ```javascript
-// Agregar a migrate.js
+// Crear un script separado en /scripts (no mezclar con migraciones de schema)
 const googleSheetData = await fetch(
   'https://script.google.com/macros/s/TU_SCRIPT_ID/exec?action=exportJSON'
 );
@@ -162,7 +176,7 @@ psql -U postgres -c "CREATE DATABASE cogniseguros;"
 **Error: "OpenAI error"**
 - Verificá que `API_KEY_OPEN` sea válida en `.env` (o `OPENAI_API_KEY` por compatibilidad)
 
-## 🎉 ¡Listo!
+## 🎉 Listo
 
 Tu app ahora tiene:
 - ✅ Backend seguro en Node.js

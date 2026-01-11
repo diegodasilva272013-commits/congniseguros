@@ -72,6 +72,12 @@ const RESET_DB = String(process.env.RESET_DB || "").trim() === "1";
 // Para sembrar data de test manualmente: SEED_TEST_DATA=1
 const SEED_TEST_DATA = String(process.env.SEED_TEST_DATA || "").trim() === "1";
 
+// Permite que migrate.js sea la única fuente de schema (UUID-safe).
+// - SETUP_DB_SKIP_SCHEMA=1 o SETUP_DB_SCHEMA=0 -> crea la DB y sale.
+const SKIP_SCHEMA =
+  String(process.env.SETUP_DB_SKIP_SCHEMA || "").trim() === "1" ||
+  String(process.env.SETUP_DB_SCHEMA || "").trim() === "0";
+
 // Conexión a PostgreSQL
 const dbName = (process.env.DB_NAME || "cogniseguros").trim();
 const adminDbName = (process.env.DB_ADMIN_DB || "postgres").trim();
@@ -128,6 +134,13 @@ try {
   const pool2 = new Pool(getPgConfig({ databaseOverride: dbName }));
 
   const conn = await pool2.connect();
+
+  if (SKIP_SCHEMA) {
+    console.log("[setup-db] SKIP_SCHEMA enabled -> database ensured, skipping legacy schema creation");
+    conn.release();
+    await pool2.end();
+    process.exit(0);
+  }
 
   // 2. Crear tablas base
   console.log("2️⃣  Creando tablas base...");

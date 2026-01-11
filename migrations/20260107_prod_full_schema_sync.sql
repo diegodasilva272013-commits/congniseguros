@@ -1,6 +1,7 @@
 -- Full, idempotent migration to sync the DB schema with the current project state
 -- Date: 2026-01-07
 -- Safe to run in production (EasyPanel) without losing data.
+-- scope: master
 
 BEGIN;
 

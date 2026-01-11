@@ -1,4 +1,5 @@
 -- 2026-01-09
+-- scope: tenant
 -- WhatsApp Inbox MVP: columnas/indices para estados + intent + metadata de mensajes
 -- Idempotente: se puede ejecutar múltiples veces.
 
