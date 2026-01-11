@@ -19,6 +19,9 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+ARG APP_BUILD_ID=unknown
+ENV APP_BUILD_ID=$APP_BUILD_ID
+
 # Copy runtime deps + built assets
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
@@ -39,4 +42,4 @@ EXPOSE 5000
 EXPOSE 80
 ENV PORT=80
 
-CMD ["node", "server.js"]
+CMD ["node", "scripts/start-runtime.mjs"]

@@ -5,10 +5,45 @@ import pkg from "pg";
 import compression from "compression";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
+import { spawn } from "node:child_process";
 import jwt from "jsonwebtoken";
 import { sendCodeEmail, sendVerificationCode, verifyCode } from "./email-auth.js";
 import fs from "fs";
 import path from "path";
+import {
+  activateRuleSet,
+  ensureDefaultScoringRuleSet,
+  ensureTenantScoringSchema,
+  getRuleSetWithRules,
+  getScoringRun,
+  listRuleSets,
+  listScoringRuns,
+  scoreCliente,
+  upsertRuleSet,
+} from "./scoring-engine.js";
+import {
+  createCampaign,
+  ensureDefaultAudienceDefinitions,
+  ensureTenantAudiencesSchema,
+  getAudienceRunMembers,
+  launchCampaign,
+  listAudienceDefinitions,
+  listAudienceRuns,
+  listCampaigns,
+  runAudience,
+  upsertAudienceDefinition,
+} from "./audience-engine.js";
+import {
+  detectAndEnqueueNotifications,
+  ensureDefaultNotificationConfig,
+  ensureTenantNotificationsSchema,
+  listNotificationJobs,
+  listNotificationTemplates,
+  listNotificationTriggers,
+  processNotificationQueue,
+  upsertNotificationTemplate,
+  upsertNotificationTrigger,
+} from "./notification-engine.js";
 
 dotenv.config();
 
@@ -50,6 +85,156 @@ app.use(
     },
   })
 );
+
+// ===== Observabilidad (Sprint 7): request_id + logs estructurados + métricas mínimas =====
+// Alertas técnicas (Sprint 7): opcional vía webhook, con throttle (no spam)
+const TECH_ALERT_WEBHOOK_URL = String(process.env.TECH_ALERT_WEBHOOK_URL || process.env.ALERT_WEBHOOK_URL || "").trim();
+const _techAlertLastByKey = new Map();
+
+const shouldEmitTechAlert = ({ key, minIntervalMs }) => {
+  const k = String(key || "generic");
+  const now = Date.now();
+  const prev = Number(_techAlertLastByKey.get(k) || 0);
+  const min = Number(minIntervalMs) || 5 * 60 * 1000;
+  if (prev && now - prev < min) return false;
+  _techAlertLastByKey.set(k, now);
+  return true;
+};
+
+const emitTechAlert = async ({ key, level, message, details }) => {
+  if (!TECH_ALERT_WEBHOOK_URL) return;
+  if (!shouldEmitTechAlert({ key, minIntervalMs: 5 * 60 * 1000 })) return;
+
+  try {
+    await fetch(TECH_ALERT_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "tech_alert",
+        at: new Date().toISOString(),
+        level: String(level || "error"),
+        message: String(message || ""),
+        details: details && typeof details === "object" ? details : { details: String(details || "") },
+        build_id: APP_BUILD_ID,
+        started_at: APP_STARTED_AT,
+      }),
+    });
+  } catch (err) {
+    console.error("[tech-alert] failed:", err?.message || err);
+  }
+};
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[process] unhandledRejection:", reason);
+  emitTechAlert({
+    key: "unhandledRejection",
+    level: "error",
+    message: "Unhandled Promise rejection",
+    details: { reason: String(reason?.message || reason) },
+  }).catch(() => {});
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("[process] uncaughtException:", err);
+  emitTechAlert({
+    key: "uncaughtException",
+    level: "error",
+    message: "Uncaught exception",
+    details: { message: String(err?.message || err), stack: String(err?.stack || "") },
+  }).catch(() => {});
+});
+
+const buildRequestId = () => {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+};
+
+const obsMetrics = {
+  started_at: APP_STARTED_AT,
+  requests_total: 0,
+  responses_2xx: 0,
+  responses_3xx: 0,
+  responses_4xx: 0,
+  responses_5xx: 0,
+  by_path: new Map(),
+};
+
+const normalizeMetricsPath = (p) => {
+  const raw = String(p || "");
+  // Evitar cardinalidad alta: colapsar IDs/UUIDs
+  return raw
+    .replace(/\/\d+(?=\/|$)/g, "/:id")
+    .replace(/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\/|$)/gi, "/:uuid");
+};
+
+app.use((req, res, next) => {
+  const started = Date.now();
+  const incoming = String(req.headers["x-request-id"] || "").trim();
+  const rid = incoming || buildRequestId();
+  req.requestId = rid;
+  res.setHeader("x-request-id", rid);
+
+  obsMetrics.requests_total += 1;
+
+  res.on("finish", () => {
+    const ms = Date.now() - started;
+    const status = Number(res.statusCode || 0);
+
+    if (status >= 200 && status < 300) obsMetrics.responses_2xx += 1;
+    else if (status >= 300 && status < 400) obsMetrics.responses_3xx += 1;
+    else if (status >= 400 && status < 500) obsMetrics.responses_4xx += 1;
+    else if (status >= 500) obsMetrics.responses_5xx += 1;
+
+    const p = normalizeMetricsPath(req.originalUrl || req.url || "");
+    const key = `${req.method} ${p}`;
+    const prev = obsMetrics.by_path.get(key) || { count: 0, avg_ms: 0, last_ms: 0, last_status: 0 };
+    const nextCount = prev.count + 1;
+    const nextAvg = Math.round((prev.avg_ms * prev.count + ms) / nextCount);
+    obsMetrics.by_path.set(key, {
+      count: nextCount,
+      avg_ms: nextAvg,
+      last_ms: ms,
+      last_status: status,
+    });
+
+    // Log JSON (sin body, sin PII)
+    if (!String(req.path || "").startsWith("/api/metrics")) {
+      const decoded = getDecodedAuthFromReq(req);
+      const authUserId = decoded?.usuario_id || decoded?.id || null;
+      const rol = decoded?.rol ? String(decoded.rol) : null;
+
+      console.log(
+        JSON.stringify({
+          type: "http_request",
+          at: new Date().toISOString(),
+          request_id: rid,
+          method: req.method,
+          path: String(req.path || req.url || ""),
+          status,
+          ms,
+          auth_user_id: authUserId,
+          auth_role: rol,
+          build_id: APP_BUILD_ID,
+        })
+      );
+    }
+  });
+
+  next();
+});
+
+// Alias estable: /v1/* -> /api/* (sin duplicar handlers)
+app.use("/v1", (req, _res, next) => {
+  // Nota: al estar montado en "/v1", Express ya recorta el prefijo en req.url.
+  // Usamos originalUrl para reconstruir el path real y evitar casos donde /v1/* termina en el SPA fallback.
+  const original = String(req.originalUrl || "");
+  const tail = original.startsWith("/v1") ? original.slice(3) : String(req.url || "");
+  req.url = `/api${tail || ""}`;
+  next();
+});
 
 // ===== FRONTEND (Vite build en /dist) =====
 const distDir = path.resolve(process.cwd(), "dist");
@@ -103,6 +288,38 @@ const ensureEmailCodesTable = async () => {
   await pool.query(
     "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_purpose_expires ON email_verification_codes(purpose, expires_at)"
   );
+};
+
+const ensureAutogptRunsSchema = async () => {
+  await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS autogpt_runs (
+      id BIGSERIAL PRIMARY KEY,
+      run_uuid UUID NOT NULL DEFAULT gen_random_uuid(),
+      aseguradora_id TEXT,
+      tenant_db TEXT,
+      purpose TEXT NOT NULL DEFAULT 'analysis',
+      status TEXT NOT NULL DEFAULT 'completed',
+      model TEXT,
+      prompt_version TEXT NOT NULL DEFAULT 'v1',
+      prompt_template TEXT,
+      prompt_hash TEXT,
+      inputs JSONB NOT NULL DEFAULT '{}'::jsonb,
+      outputs JSONB NOT NULL DEFAULT '{}'::jsonb,
+      decisions JSONB NOT NULL DEFAULT '{}'::jsonb,
+      error TEXT,
+      started_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS ux_autogpt_runs_run_uuid ON autogpt_runs(run_uuid)");
+  await pool.query("CREATE INDEX IF NOT EXISTS ix_autogpt_runs_created_at ON autogpt_runs(created_at)");
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS ix_autogpt_runs_aseguradora_created_at ON autogpt_runs(aseguradora_id, created_at)"
+  );
+  await pool.query("CREATE INDEX IF NOT EXISTS ix_autogpt_runs_tenant_created_at ON autogpt_runs(tenant_db, created_at)");
+  await pool.query("CREATE INDEX IF NOT EXISTS ix_autogpt_runs_status_created_at ON autogpt_runs(status, created_at)");
 };
 
 // ===== CAPTIONS (AI Creator) =====
@@ -614,6 +831,53 @@ app.get("/health", (req, res) => {
   });
 });
 
+// Liveness: el proceso está vivo (no valida DB)
+app.get(["/live", "/api/live"], (_req, res) => {
+  res.json({
+    ok: true,
+    status: "live",
+    time: new Date().toISOString(),
+    started_at: APP_STARTED_AT,
+    build_id: APP_BUILD_ID,
+  });
+});
+
+// Readiness: listo para recibir tráfico (valida DB si está configurada)
+app.get(["/ready", "/api/ready"], async (_req, res) => {
+  if (!dbConnected) {
+    return res.status(503).json({
+      ok: false,
+      status: "not_ready",
+      reason: "db_not_connected",
+      time: new Date().toISOString(),
+      started_at: APP_STARTED_AT,
+      build_id: APP_BUILD_ID,
+    });
+  }
+
+  try {
+    await pool.query("SELECT 1");
+    return res.json({
+      ok: true,
+      status: "ready",
+      time: new Date().toISOString(),
+      started_at: APP_STARTED_AT,
+      build_id: APP_BUILD_ID,
+    });
+  } catch (e) {
+    dbConnected = false;
+    return res.status(503).json({
+      ok: false,
+      status: "not_ready",
+      reason: "db_query_failed",
+      error: String(e?.message || e),
+      time: new Date().toISOString(),
+      started_at: APP_STARTED_AT,
+      build_id: APP_BUILD_ID,
+    });
+  }
+});
+
 const { Pool } = pkg;
 
 // ======== MULTI-TENANT (OPCIÓN C: 1 DB por aseguradora) ========
@@ -637,16 +901,17 @@ const getTenantDbNameForUserId = (userId) => `${TENANT_DB_PREFIX}${userId}`;
 
 // Para lookup de clientes: NO crear tenants nuevos; solo usar DBs existentes.
 const getExistingTenantPoolForUserId = async (userId) => {
-  const id = Number(userId);
-  if (!Number.isFinite(id)) return null;
+  const idText = String(userId ?? "").trim();
+  if (!idText) return null;
 
   // asegurar columna tenant_db
   await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS tenant_db TEXT");
 
-  const r = await pool.query("SELECT id, tenant_db FROM usuarios WHERE id = $1", [id]);
+  const r = await pool.query("SELECT id, tenant_db FROM usuarios WHERE id::text = $1 LIMIT 1", [idText]);
   if (r.rows.length === 0) return null;
 
-  const dbName = r.rows[0].tenant_db || getTenantDbNameForUserId(id);
+  const canonicalId = String(r.rows[0]?.id ?? "").trim() || idText;
+  const dbName = r.rows[0].tenant_db || getTenantDbNameForUserId(canonicalId);
 
   // si la DB no existe, no la creamos acá
   const exists = await adminPool.query("SELECT 1 FROM pg_database WHERE datname = $1", [dbName]);
@@ -693,6 +958,12 @@ const ensureTenantSchemasCached = async (tenantDb, tenantPool) => {
   const work = (async () => {
     await ensureTenantClientesPaisSchema(tenantPool);
     await ensureTenantWhatsAppInboxSchema(tenantPool);
+    await ensureTenantScoringSchema(tenantPool);
+    await ensureDefaultScoringRuleSet(tenantPool);
+    await ensureTenantAudiencesSchema(tenantPool);
+    await ensureDefaultAudienceDefinitions(tenantPool);
+    await ensureTenantNotificationsSchema(tenantPool);
+    await ensureDefaultNotificationConfig(tenantPool);
   })();
 
   tenantSchemaEnsurePromises.set(key, work);
@@ -705,20 +976,148 @@ const ensureTenantSchemasCached = async (tenantDb, tenantPool) => {
   }
 };
 
+// ===== NOTIFICATIONS (Sprint 5) =====
+const resolveNotificationsActorAndTenant = async (req) => {
+  if (!dbConnected) {
+    return { ok: false, status: 503, message: "DB no disponible" };
+  }
+
+  const decoded = getDecodedAuthFromReq(req);
+  if (!decoded) return { ok: false, status: 401, message: "No autorizado" };
+
+  // Enterprise token: solo su tenant.
+  if (decoded.enterprise) {
+    const userId = String(decoded.usuario_id || decoded.id || "").trim();
+    if (!userId) return { ok: false, status: 401, message: "Token inválido" };
+    const { tenantPool } = await getTenantPoolForUserIdFast({ userId, allowCreate: false });
+    await ensureTenantNotificationsSchema(tenantPool);
+    await ensureDefaultNotificationConfig(tenantPool);
+    return { ok: true, actor: { mode: "enterprise", user_id: userId }, tenantPool, aseguradoraId: userId };
+  }
+
+  // Admin JWT: puede operar sobre cualquier aseguradora_id.
+  if (String(decoded.rol || "").toLowerCase() === "admin") {
+    const admin = await requireAdminAccess(req);
+    if (!admin.ok) return admin;
+
+    const rawId = req.body?.aseguradora_id || req.query?.aseguradora_id;
+    const userId = String(rawId || "").trim();
+    if (!userId) return { ok: false, status: 400, message: "aseguradora_id requerido" };
+    const { tenantPool } = await getTenantPoolForUserIdFast({ userId, allowCreate: false });
+    await ensureTenantNotificationsSchema(tenantPool);
+    await ensureDefaultNotificationConfig(tenantPool);
+    return { ok: true, actor: { mode: "admin", user_id: admin.usuario_id }, tenantPool, aseguradoraId: userId };
+  }
+
+  // JWT estándar (aseguradora): solo su propio tenant.
+  const ownerId = String(decoded.id || decoded.usuario_id || "").trim();
+  if (!ownerId) return { ok: false, status: 401, message: "Token inválido" };
+  const { tenantPool } = await getTenantPoolForUserIdFast({ userId: ownerId, allowCreate: false });
+  await ensureTenantNotificationsSchema(tenantPool);
+  await ensureDefaultNotificationConfig(tenantPool);
+  return { ok: true, actor: { mode: "user", user_id: ownerId }, tenantPool, aseguradoraId: ownerId };
+};
+
+// ===== AUDIENCES/CAMPAIGNS (Sprint 4) =====
+const resolveAudienceActorAndTenant = async (req) => {
+  if (!dbConnected) {
+    return { ok: false, status: 503, message: "DB no disponible" };
+  }
+
+  const decoded = getDecodedAuthFromReq(req);
+  if (!decoded) return { ok: false, status: 401, message: "No autorizado" };
+
+  // Enterprise token: solo su tenant.
+  if (decoded.enterprise) {
+    const userId = String(decoded.usuario_id || decoded.id || "").trim();
+    if (!userId) return { ok: false, status: 401, message: "Token inválido" };
+    const { tenantPool } = await getTenantPoolForUserIdFast({ userId, allowCreate: false });
+    await ensureTenantAudiencesSchema(tenantPool);
+    await ensureDefaultAudienceDefinitions(tenantPool);
+    return { ok: true, actor: { mode: "enterprise", user_id: userId }, tenantPool };
+  }
+
+  // Admin JWT: puede operar sobre cualquier aseguradora_id.
+  if (String(decoded.rol || "").toLowerCase() === "admin") {
+    const admin = await requireAdminAccess(req);
+    if (!admin.ok) return admin;
+
+    const rawId = req.body?.aseguradora_id || req.query?.aseguradora_id;
+    const userId = String(rawId || "").trim();
+    if (!userId) return { ok: false, status: 400, message: "aseguradora_id requerido" };
+    const { tenantPool } = await getTenantPoolForUserIdFast({ userId, allowCreate: false });
+    await ensureTenantAudiencesSchema(tenantPool);
+    await ensureDefaultAudienceDefinitions(tenantPool);
+    return { ok: true, actor: { mode: "admin", user_id: admin.usuario_id }, tenantPool };
+  }
+
+  // JWT estándar (aseguradora): solo su propio tenant.
+  const ownerId = String(decoded.id || decoded.usuario_id || "").trim();
+  if (!ownerId) return { ok: false, status: 401, message: "Token inválido" };
+  const { tenantPool } = await getTenantPoolForUserIdFast({ userId: ownerId, allowCreate: false });
+  await ensureTenantAudiencesSchema(tenantPool);
+  await ensureDefaultAudienceDefinitions(tenantPool);
+  return { ok: true, actor: { mode: "user", user_id: ownerId }, tenantPool };
+};
+
+// ===== SCORING (Sprint 3) =====
+const resolveScoringActorAndTenant = async (req) => {
+  if (!dbConnected) {
+    return { ok: false, status: 503, message: "DB no disponible" };
+  }
+
+  const decoded = getDecodedAuthFromReq(req);
+  if (!decoded) return { ok: false, status: 401, message: "No autorizado" };
+
+  // Enterprise token: solo su tenant.
+  if (decoded.enterprise) {
+    const userId = String(decoded.usuario_id || decoded.id || "").trim();
+    if (!userId) return { ok: false, status: 401, message: "Token inválido" };
+    const { tenantPool } = await getTenantPoolForUserIdFast({ userId, allowCreate: false });
+    await ensureTenantScoringSchema(tenantPool);
+    await ensureDefaultScoringRuleSet(tenantPool);
+    return { ok: true, actor: { mode: "enterprise", user_id: userId }, tenantPool };
+  }
+
+  // Admin JWT: puede operar sobre cualquier aseguradora_id.
+  if (String(decoded.rol || "").toLowerCase() === "admin") {
+    const admin = await requireAdminAccess(req);
+    if (!admin.ok) return admin;
+
+    const rawId = req.body?.aseguradora_id || req.query?.aseguradora_id;
+    const userId = String(rawId || "").trim();
+    if (!userId) return { ok: false, status: 400, message: "aseguradora_id requerido" };
+    const { tenantPool } = await getTenantPoolForUserIdFast({ userId, allowCreate: false });
+    await ensureTenantScoringSchema(tenantPool);
+    await ensureDefaultScoringRuleSet(tenantPool);
+    return { ok: true, actor: { mode: "admin", user_id: admin.usuario_id }, tenantPool };
+  }
+
+  // JWT estándar (aseguradora): solo su propio tenant.
+  const ownerId = String(decoded.id || decoded.usuario_id || "").trim();
+  if (!ownerId) return { ok: false, status: 401, message: "Token inválido" };
+  const { tenantPool } = await getTenantPoolForUserIdFast({ userId: ownerId, allowCreate: false });
+  await ensureTenantScoringSchema(tenantPool);
+  await ensureDefaultScoringRuleSet(tenantPool);
+  return { ok: true, actor: { mode: "user", user_id: ownerId }, tenantPool };
+};
+
 const getTenantPoolForUserIdFast = async ({ userId, allowCreate = false }) => {
-  const id = Number(userId);
-  if (!Number.isFinite(id)) throw new Error("aseguradora_id inválido");
+  const idText = String(userId ?? "").trim();
+  if (!idText) throw new Error("aseguradora_id inválido");
 
   // asegurar columna tenant_db
   await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS tenant_db TEXT").catch(() => {});
 
-  const r = await pool.query("SELECT id, tenant_db FROM usuarios WHERE id = $1", [id]);
+  const r = await pool.query("SELECT id, tenant_db FROM usuarios WHERE id::text = $1 LIMIT 1", [idText]);
   if (r.rows.length === 0) throw new Error("Usuario no encontrado");
+
+  const canonicalId = String(r.rows[0]?.id ?? "").trim() || idText;
 
   let tenantDb = String(r.rows[0].tenant_db || "").trim();
   if (!tenantDb) {
-    tenantDb = getTenantDbNameForUserId(id);
-    await pool.query("UPDATE usuarios SET tenant_db = $1 WHERE id = $2", [tenantDb, id]).catch(() => {});
+    tenantDb = getTenantDbNameForUserId(canonicalId);
+    await pool.query("UPDATE usuarios SET tenant_db = $1 WHERE id::text = $2", [tenantDb, canonicalId]).catch(() => {});
   }
 
   const exists = await adminPool.query("SELECT 1 FROM pg_database WHERE datname = $1", [tenantDb]);
@@ -787,18 +1186,23 @@ const ensureTenantDbExists = async (dbName) => {
   await tenantPool.query(schemaSql);
 };
 
-const ensureTenantForUserId = async (userId) => {
+const _ensureTenantForUserId = async (userId) => {
   // 1) asegurar columna tenant_db
   await pool.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS tenant_db TEXT");
 
   // 2) obtener/definir db
-  const r = await pool.query("SELECT id, tenant_db FROM usuarios WHERE id = $1", [userId]);
+  const idText = String(userId ?? "").trim();
+  if (!idText) throw new Error("Usuario no encontrado");
+
+  const r = await pool.query("SELECT id, tenant_db FROM usuarios WHERE id::text = $1 LIMIT 1", [idText]);
   if (r.rows.length === 0) throw new Error("Usuario no encontrado");
+
+  const canonicalId = String(r.rows[0]?.id ?? "").trim() || idText;
 
   let tenantDb = r.rows[0].tenant_db;
   if (!tenantDb) {
-    tenantDb = getTenantDbNameForUserId(userId);
-    await pool.query("UPDATE usuarios SET tenant_db = $1 WHERE id = $2", [tenantDb, userId]);
+    tenantDb = getTenantDbNameForUserId(canonicalId);
+    await pool.query("UPDATE usuarios SET tenant_db = $1 WHERE id::text = $2", [tenantDb, canonicalId]);
   }
 
   // 3) crear DB + schema
@@ -946,14 +1350,14 @@ const ensureInvitacionesPaisSchema = async () => {
 const getPaisForAseguradoraId = async (aseguradoraId) => {
   try {
     await ensureUsuariosPaisSchema();
-    const r = await pool.query("SELECT pais FROM usuarios WHERE id = $1", [Number(aseguradoraId)]);
+    const r = await pool.query("SELECT pais FROM usuarios WHERE id::text = $1 LIMIT 1", [String(aseguradoraId ?? "").trim()]);
     return normalizePais(r.rows[0]?.pais);
   } catch (err) {
     // Si la columna no existe aún (DB vieja), migrar y reintentar una vez.
-    if (String(err?.code) === "42703" || /column\s+\"pais\"\s+does not exist/i.test(String(err?.message || ""))) {
+    if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
       try {
         await ensureUsuariosPaisSchema();
-        const r2 = await pool.query("SELECT pais FROM usuarios WHERE id = $1", [Number(aseguradoraId)]);
+        const r2 = await pool.query("SELECT pais FROM usuarios WHERE id::text = $1 LIMIT 1", [String(aseguradoraId ?? "").trim()]);
         return normalizePais(r2.rows[0]?.pais);
       } catch {
         return "AR";
@@ -966,7 +1370,7 @@ const getPaisForAseguradoraId = async (aseguradoraId) => {
 const getAllowedPaisesForAseguradoraId = async (aseguradoraId) => {
   try {
     await ensureUsuariosPaisSchema();
-    const r = await pool.query("SELECT pais, paises FROM usuarios WHERE id = $1", [Number(aseguradoraId)]);
+    const r = await pool.query("SELECT pais, paises FROM usuarios WHERE id::text = $1 LIMIT 1", [String(aseguradoraId ?? "").trim()]);
     const row = r.rows[0] || {};
     const fallbackPais = normalizePais(row.pais);
     const canonical = normalizePaisList(row.paises, fallbackPais);
@@ -978,10 +1382,10 @@ const getAllowedPaisesForAseguradoraId = async (aseguradoraId) => {
     return uniq.length ? uniq : [fallbackPais];
   } catch (err) {
     // Si la columna no existe aún (DB vieja), migrar y reintentar una vez.
-    if (String(err?.code) === "42703" || /column\s+\"pais\"\s+does not exist/i.test(String(err?.message || ""))) {
+    if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
       try {
         await ensureUsuariosPaisSchema();
-        const r2 = await pool.query("SELECT pais, paises FROM usuarios WHERE id = $1", [Number(aseguradoraId)]);
+        const r2 = await pool.query("SELECT pais, paises FROM usuarios WHERE id::text = $1 LIMIT 1", [String(aseguradoraId ?? "").trim()]);
         const row2 = r2.rows[0] || {};
         const fallbackPais2 = normalizePais(row2.pais);
         const canonical2 = normalizePaisList(row2.paises, fallbackPais2);
@@ -1208,8 +1612,8 @@ app.post("/api/admin/login-password", async (req, res) => {
 const getTenantPoolFromReq = async (req) => {
   const raw = req.body?.aseguradora_id || req.query?.aseguradora_id || req.body?.scope_id;
   if (!raw) throw new Error("aseguradora_id requerido");
-  const userId = Number(raw);
-  if (!Number.isFinite(userId)) throw new Error("aseguradora_id inválido");
+  const userId = String(raw ?? "").trim();
+  if (!userId) throw new Error("aseguradora_id inválido");
   const { tenantPool } = await getTenantPoolForUserIdFast({ userId, allowCreate: false });
   return tenantPool;
 };
@@ -1277,6 +1681,9 @@ pool.query("SELECT NOW()").then(() => {
 
   // Códigos por email persistentes (evita fallos por memoria/instancias)
   ensureEmailCodesTable().catch(() => {});
+
+  // AutoGPT runs (auditable)
+  ensureAutogptRunsSchema().catch(() => {});
 
   // Auditoría (evita crash si falta la tabla)
   ensureAuditoriaSchema().catch(() => {});
@@ -1422,7 +1829,7 @@ const checkMembership = async (req, res, next) => {
 };
 
 // ======== MIDDLEWARE: VERIFICAR PERMISO DE CARACTERÍSTICA =====
-const checkFeature = (feature) => async (req, res, next) => {
+const _checkFeature = (feature) => async (req, res, next) => {
   if (!req.subscription) {
     return res.status(403).json({ status: "error", message: "Membresía requerida" });
   }
@@ -1515,7 +1922,7 @@ const resolveAseguradoraIdFromPhoneNumberId = async (phoneNumberId) => {
   try {
     const r = await pool.query("SELECT id FROM usuarios WHERE wpp_phone_number_id = $1 LIMIT 1", [phoneId]);
     const id = r.rows?.[0]?.id;
-    if (id != null) return Number(id);
+    if (id != null) return String(id);
 
     // Fallback: buscar en configuracion (master) si el mapeo no fue persistido en usuarios.
     // Esto pasa cuando se guardó la config pero falló el UPDATE de usuarios o la DB venía vieja.
@@ -1525,13 +1932,15 @@ const resolveAseguradoraIdFromPhoneNumberId = async (phoneNumberId) => {
         [phoneId]
       );
       const scopeId = safeTrim(c.rows?.[0]?.scope_id || "");
-      const parsed = Number(scopeId);
-      if (Number.isFinite(parsed) && parsed > 0) {
+      if (scopeId) {
         // self-heal: persistir para que la próxima resolución sea O(1)
         await pool
-          .query("UPDATE usuarios SET wpp_phone_number_id = $1 WHERE id = $2 AND (wpp_phone_number_id IS NULL OR TRIM(wpp_phone_number_id) = '')", [phoneId, parsed])
+          .query(
+            "UPDATE usuarios SET wpp_phone_number_id = $1 WHERE id::text = $2 AND (wpp_phone_number_id IS NULL OR TRIM(wpp_phone_number_id) = '')",
+            [phoneId, scopeId]
+          )
           .catch(() => {});
-        return parsed;
+        return scopeId;
       }
     } catch {
       // ignore
@@ -1550,6 +1959,64 @@ const requireAutomationKey = (req) => {
   if (!expected) return true; // si no está configurado, no bloquea (dev)
   const got = safeTrim(req.headers["x-automation-key"] || "");
   return got === expected;
+};
+
+// Para endpoints sensibles (autogpt/reportes): en producción, si no hay key configurada, DENEGAR.
+const requireAutomationKeyStrict = (req) => {
+  if (safeTrim(process.env.NODE_ENV || "") !== "production") return true;
+  const expected = safeTrim(process.env.AUTOMATION_API_KEY || "");
+  if (!expected) return false;
+  const got = safeTrim(req.headers["x-automation-key"] || "");
+  return got === expected;
+};
+
+const canAccessAseguradora = (req, aseguradoraId) => {
+  const decoded = getDecodedAuthFromReq(req);
+  const authUserId = decoded?.usuario_id || decoded?.id || null;
+  const rol = String(decoded?.rol || "").toLowerCase();
+
+  if (rol === "admin") return true;
+  if (authUserId != null && String(authUserId) === String(aseguradoraId)) return true;
+  if (requireAutomationKeyStrict(req)) return true;
+  return false;
+};
+
+// ===== REPORTS (Sprint 2): contratos estables JSON/CSV =====
+const REPORT_CONTRACT_VERSION = "v1";
+
+const toIsoOrNull = (d) => {
+  try {
+    if (!(d instanceof Date) || isNaN(d.getTime())) return null;
+    return d.toISOString();
+  } catch {
+    return null;
+  }
+};
+
+const parseDateFromReq = (raw) => {
+  if (!raw) return null;
+  const d = new Date(String(raw));
+  if (!(d instanceof Date) || isNaN(d.getTime())) return null;
+  return d;
+};
+
+const csvEscape = (v) => {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  if (/[\n\r",]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+};
+
+const sendCsvResponse = (res, filename, rows, columns) => {
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+  const header = columns.map((c) => csvEscape(c)).join(",");
+  const lines = [header];
+  for (const row of rows || []) {
+    lines.push(columns.map((c) => csvEscape(row?.[c])).join(","));
+  }
+  res.send(lines.join("\n"));
 };
 
 // ===== WhatsApp debug (in-memory) =====
@@ -1618,7 +2085,7 @@ const sendWhatsAppText = async (req, { aseguradora_id, to, message, actor, type,
     const msg = data?.error?.message || "Error al enviar";
     pushWppDebug("sendAttempts", {
       at: new Date().toISOString(),
-      aseguradora_id: Number(aseguradora_id),
+      aseguradora_id: String(aseguradora_id),
       to: normalizeDigits(toNorm),
       ok: false,
       status: response.status,
@@ -1637,7 +2104,7 @@ const sendWhatsAppText = async (req, { aseguradora_id, to, message, actor, type,
 
   pushWppDebug("sendAttempts", {
     at: new Date().toISOString(),
-    aseguradora_id: Number(aseguradora_id),
+    aseguradora_id: String(aseguradora_id),
     to: normalizeDigits(toNorm),
     ok: true,
     status: 200,
@@ -1665,7 +2132,7 @@ const sendWhatsAppText = async (req, { aseguradora_id, to, message, actor, type,
       wabaPhoneNumberId: String(phoneId || ""),
     });
     if (saved?.message) {
-      wppBroadcast(Number(aseguradora_id), {
+      wppBroadcast(String(aseguradora_id), {
         type: "wpp_message",
         conversation_id: saved.conversation.id,
         wa_contact: saved.conversation.wa_contact,
@@ -1684,6 +2151,58 @@ const sendWhatsAppText = async (req, { aseguradora_id, to, message, actor, type,
 const isTruthy = (v) => {
   const s = String(v ?? "").trim().toLowerCase();
   return s === "1" || s === "true" || s === "yes" || s === "on";
+};
+
+const runNodeScriptCapture = async ({ scriptPath, scriptArgs = [], env = {}, timeoutMs = 10 * 60 * 1000 }) => {
+  const fullScriptPath = path.resolve(process.cwd(), scriptPath);
+
+  const started = Date.now();
+  return await new Promise((resolve) => {
+    const child = spawn(process.execPath, [fullScriptPath, ...scriptArgs], {
+      cwd: process.cwd(),
+      env: { ...process.env, ...env },
+      windowsHide: true,
+    });
+
+    let out = "";
+    const max = 180_000;
+    const push = (chunk) => {
+      if (!chunk) return;
+      out += String(chunk);
+      if (out.length > max) out = out.slice(out.length - max);
+    };
+
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+    }, Math.max(5_000, Number(timeoutMs) || 0));
+
+    child.stdout.on("data", (d) => push(d));
+    child.stderr.on("data", (d) => push(d));
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({
+        ok: code === 0,
+        code: Number(code ?? -1),
+        ms: Date.now() - started,
+        output: out,
+      });
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({
+        ok: false,
+        code: -1,
+        ms: Date.now() - started,
+        output: `${out}\n[spawn_error] ${String(err?.message || err)}`,
+      });
+    });
+  });
 };
 
 const resolveWppAiAutoreplyEnabledForAseguradora = async (aseguradoraId) => {
@@ -1797,7 +2316,7 @@ const maybeAutoReplyFromWebhook = async ({ aseguradoraId, waFrom, name, bodyText
   }
 };
 
-const calcularDiasRestantes = (fechaFinStr) => {
+const _calcularDiasRestantes = (fechaFinStr) => {
   const s = String(fechaFinStr || "").trim();
   if (!s) return "";
   const dateOnly = s.includes("T") ? s.split("T")[0] : s;
@@ -1855,8 +2374,639 @@ app.get("/api/health", async (req, res) => {
   });
 });
 
+app.get("/api/metrics", (req, res) => {
+  const top = 60;
+  const byPath = Array.from(obsMetrics.by_path.entries())
+    .map(([k, v]) => ({ key: k, ...v }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, top);
+
+  res.json({
+    status: "success",
+    started_at: obsMetrics.started_at,
+    build_id: APP_BUILD_ID,
+    counters: {
+      requests_total: obsMetrics.requests_total,
+      responses_2xx: obsMetrics.responses_2xx,
+      responses_3xx: obsMetrics.responses_3xx,
+      responses_4xx: obsMetrics.responses_4xx,
+      responses_5xx: obsMetrics.responses_5xx,
+    },
+    by_path_top: byPath,
+  });
+});
+
 app.post("/api/ping", (req, res) => {
   res.json({ status: "success", message: "pong" });
+});
+
+// ===== AutoGPT Orchestrator (audit only; NO side effects) =====
+app.post("/api/autogpt/runs", async (req, res) => {
+  try {
+    if (!requireAutomationKeyStrict(req)) {
+      return res.status(401).json({ status: "error", message: "unauthorized" });
+    }
+    if (!dbConnected) {
+      return res.status(503).json({ status: "error", message: "db_not_connected" });
+    }
+
+    const b = req.body || {};
+    const aseguradoraId = safeTrim(b.aseguradora_id || b.scope_id || "");
+    const tenantDb = safeTrim(b.tenant_db || "");
+
+    const purpose = safeTrim(b.purpose || "analysis") || "analysis";
+    const status = safeTrim(b.status || "completed") || "completed";
+    const model = safeTrim(b.model || "");
+    const promptVersion = safeTrim(b.prompt_version || "v1") || "v1";
+    const promptTemplate = typeof b.prompt_template === "string" ? b.prompt_template : null;
+    const promptHash = safeTrim(b.prompt_hash || "");
+
+    const inputs = b.inputs && typeof b.inputs === "object" ? b.inputs : {};
+    const outputs = b.outputs && typeof b.outputs === "object" ? b.outputs : {};
+    const decisions = b.decisions && typeof b.decisions === "object" ? b.decisions : {};
+    const error = typeof b.error === "string" ? b.error : null;
+
+    const startedAt = b.started_at ? new Date(b.started_at) : null;
+    const finishedAt = b.finished_at ? new Date(b.finished_at) : null;
+
+    const r = await pool.query(
+      `INSERT INTO autogpt_runs(
+        aseguradora_id, tenant_db, purpose, status, model,
+        prompt_version, prompt_template, prompt_hash,
+        inputs, outputs, decisions,
+        error, started_at, finished_at
+      ) VALUES (
+        $1,$2,$3,$4,$5,
+        $6,$7,$8,
+        $9,$10,$11,
+        $12,$13,$14
+      ) RETURNING run_uuid, created_at`,
+      [
+        aseguradoraId || null,
+        tenantDb || null,
+        purpose,
+        status,
+        model || null,
+        promptVersion,
+        promptTemplate,
+        promptHash || null,
+        inputs,
+        outputs,
+        decisions,
+        error,
+        startedAt && !isNaN(startedAt) ? startedAt.toISOString() : null,
+        finishedAt && !isNaN(finishedAt) ? finishedAt.toISOString() : null,
+      ]
+    );
+
+    return res.json({ status: "success", run_uuid: r.rows?.[0]?.run_uuid, created_at: r.rows?.[0]?.created_at });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err?.message || String(err) });
+  }
+});
+
+app.get("/api/autogpt/runs", async (req, res) => {
+  try {
+    if (!requireAutomationKeyStrict(req)) {
+      return res.status(401).json({ status: "error", message: "unauthorized" });
+    }
+    if (!dbConnected) {
+      return res.status(503).json({ status: "error", message: "db_not_connected" });
+    }
+
+    const aseguradoraId = safeTrim(req.query?.aseguradora_id || "");
+    const tenantDb = safeTrim(req.query?.tenant_db || "");
+    const limitRaw = Number(req.query?.limit || 50);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
+
+    const clauses = [];
+    const params = [];
+    if (aseguradoraId) {
+      params.push(aseguradoraId);
+      clauses.push(`aseguradora_id = $${params.length}`);
+    }
+    if (tenantDb) {
+      params.push(tenantDb);
+      clauses.push(`tenant_db = $${params.length}`);
+    }
+
+    params.push(limit);
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+    const q = `
+      SELECT run_uuid, aseguradora_id, tenant_db, purpose, status, model,
+             prompt_version, prompt_hash,
+             inputs, outputs, decisions,
+             error, started_at, finished_at, created_at
+      FROM autogpt_runs
+      ${where}
+      ORDER BY created_at DESC
+      LIMIT $${params.length}
+    `;
+
+    const r = await pool.query(q, params);
+    return res.json({ status: "success", rows: r.rows || [] });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err?.message || String(err) });
+  }
+});
+
+// Sprint 6: análisis audit-only (sin side effects). Genera un resumen deterministic y lo persiste en autogpt_runs.
+app.post("/api/autogpt/analyze", async (req, res) => {
+  try {
+    // Acceso: automation key (prod-safe) o admin JWT.
+    let accessMode = "admin";
+    let admin = null;
+    if (requireAutomationKeyStrict(req)) {
+      accessMode = "automation";
+    } else {
+      admin = await requireAdminAccess(req);
+      if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
+    }
+
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    const b = req.body || {};
+    const aseguradoraIdRaw = b.aseguradora_id || b.scope_id || req.query?.aseguradora_id;
+    const aseguradoraId = Number(aseguradoraIdRaw);
+    if (!Number.isFinite(aseguradoraId)) {
+      return res.status(400).json({ status: "error", message: "aseguradora_id requerido" });
+    }
+
+    const asOfDate = String(b.as_of_date || new Date().toISOString()).slice(0, 10);
+    const maxItems = Math.min(Math.max(Number(b.max_items) || 10, 1), 50);
+
+    const tenantPool = await getTenantPoolFromReq({
+      ...req,
+      body: { ...(req.body || {}), aseguradora_id: aseguradoraId },
+      query: { ...(req.query || {}), aseguradora_id: aseguradoraId },
+    });
+
+    // Asegurar schemas evolutivos (safe)
+    try {
+      await ensureTenantSchemasCached(String(aseguradoraId), tenantPool);
+    } catch {
+      // ignore
+    }
+
+    const allowedPaises = await getAllowedPaisesForAseguradoraId(aseguradoraId).catch(() => ["AR"]);
+
+    const out = {
+      as_of_date: asOfDate,
+      aseguradora_id: aseguradoraId,
+      kpis: {},
+      snapshots: {},
+      recommendations: [],
+    };
+
+    // --- KPIs: clientes / cuota_paga
+    try {
+      const r = await tenantPool.query(
+        `
+        SELECT
+          COUNT(*)::int AS clientes_total,
+          SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
+          SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'NO' THEN 1 ELSE 0 END)::int AS clientes_cuota_no,
+          COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total,
+          COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
+        FROM clientes
+        WHERE pais = ANY($1::text[])
+        `,
+        [allowedPaises]
+      );
+      out.kpis = r.rows?.[0] || {};
+    } catch (e) {
+      out.kpis = { error: String(e?.message || e) };
+    }
+
+    // --- Scoring snapshot
+    try {
+      const exists = await tenantPool.query("SELECT to_regclass('scoring_runs') as t");
+      if (exists.rows?.[0]?.t) {
+        const r = await tenantPool.query(
+          `
+          SELECT run_uuid, created_at, items_count,
+                 COALESCE((summary->>'total_score')::numeric, NULL) AS total_score
+          FROM scoring_runs
+          ORDER BY created_at DESC
+          LIMIT $1
+          `,
+          [maxItems]
+        );
+        out.snapshots.scoring_recent = r.rows || [];
+      } else {
+        out.snapshots.scoring_recent = [];
+      }
+    } catch {
+      out.snapshots.scoring_recent = [];
+    }
+
+    // --- Audiences/Campaigns snapshot
+    try {
+      const aex = await tenantPool.query("SELECT to_regclass('audience_runs') as t");
+      if (aex.rows?.[0]?.t) {
+        const r = await tenantPool.query(
+          `
+          SELECT run_uuid, created_at, definition_id, members_count, meta
+          FROM audience_runs
+          ORDER BY created_at DESC
+          LIMIT $1
+          `,
+          [maxItems]
+        );
+        out.snapshots.audience_runs_recent = r.rows || [];
+      } else {
+        out.snapshots.audience_runs_recent = [];
+      }
+
+      const cex = await tenantPool.query("SELECT to_regclass('campaign_runs') as t");
+      if (cex.rows?.[0]?.t) {
+        const r = await tenantPool.query(
+          `
+          SELECT run_uuid, created_at, campaign_id, audience_run_uuid, status, metrics
+          FROM campaign_runs
+          ORDER BY created_at DESC
+          LIMIT $1
+          `,
+          [maxItems]
+        );
+        out.snapshots.campaign_runs_recent = r.rows || [];
+      } else {
+        out.snapshots.campaign_runs_recent = [];
+      }
+    } catch {
+      out.snapshots.audience_runs_recent = out.snapshots.audience_runs_recent || [];
+      out.snapshots.campaign_runs_recent = out.snapshots.campaign_runs_recent || [];
+    }
+
+    // --- Notifications snapshot
+    try {
+      const nex = await tenantPool.query("SELECT to_regclass('notification_jobs') as t");
+      if (nex.rows?.[0]?.t) {
+        const r = await tenantPool.query(
+          `
+          SELECT status, COUNT(*)::int AS count
+          FROM notification_jobs
+          GROUP BY status
+          ORDER BY status ASC
+          `
+        );
+        out.snapshots.notification_jobs_by_status = r.rows || [];
+      } else {
+        out.snapshots.notification_jobs_by_status = [];
+      }
+    } catch {
+      out.snapshots.notification_jobs_by_status = [];
+    }
+
+    // --- Recommendations (heurística simple, audit-only)
+    const cuotaNo = Number(out.kpis?.clientes_cuota_no || 0);
+    const clientesTotal = Number(out.kpis?.clientes_total || 0);
+    if (clientesTotal > 0 && cuotaNo / clientesTotal > 0.1) {
+      out.recommendations.push({
+        key: "notify_cuota_impaga",
+        title: "Activar notificación de cuota impaga",
+        why: "Hay un porcentaje relevante de clientes con cuota_paga=NO",
+      });
+    }
+    out.recommendations.push({
+      key: "run_audience_vencimiento",
+      title: "Correr audiencia de vencimientos",
+      why: "Permite medir volumen y planificar campañas/WhatsApp",
+    });
+
+    // Persistir en master (auditable)
+    try {
+      const inputs = {
+        aseguradora_id: aseguradoraId,
+        as_of_date: asOfDate,
+        max_items: maxItems,
+        access_mode: accessMode,
+        requested_by: accessMode === "admin" ? { admin_user_id: admin?.usuario_id } : { automation: true },
+      };
+
+      const r = await pool.query(
+        `INSERT INTO autogpt_runs(
+          aseguradora_id, tenant_db, purpose, status, model,
+          prompt_version, prompt_template, prompt_hash,
+          inputs, outputs, decisions,
+          error, started_at, finished_at
+        ) VALUES (
+          $1,$2,'analysis','completed',$3,
+          $4,$5,$6,
+          $7,$8,$9,
+          NULL,NOW(),NOW()
+        ) RETURNING run_uuid, created_at`,
+        [
+          String(aseguradoraId),
+          null,
+          "local-heuristic-v1",
+          "sprint6_v1",
+          "audit_only_summary",
+          null,
+          inputs,
+          out,
+          { actions: "none" },
+        ]
+      );
+
+      return res.json({ status: "success", run_uuid: r.rows?.[0]?.run_uuid, created_at: r.rows?.[0]?.created_at, output: out });
+    } catch {
+      // Si falla persistencia, igual devolvemos el análisis.
+      return res.json({ status: "success", run_uuid: null, created_at: null, output: out });
+    }
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err?.message || String(err) });
+  }
+});
+
+app.post("/api/reports/financial/monthly", async (req, res) => {
+  try {
+    const aseguradoraId = req.body?.aseguradora_id;
+    if (!aseguradoraId) return res.status(400).json({ status: "error", message: "aseguradora_id requerido" });
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    if (!canAccessAseguradora(req, aseguradoraId)) {
+      return res.status(401).json({ status: "error", message: "No autorizado" });
+    }
+
+    const to = parseDateFromReq(req.body?.to) || new Date();
+    const from = parseDateFromReq(req.body?.from) || new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    const fromIso = toIsoOrNull(from);
+    const toIso = toIsoOrNull(to);
+    if (!fromIso || !toIso) return res.status(400).json({ status: "error", message: "from/to inválidos" });
+
+    const tenantPool = await getTenantPoolFromReq({ ...req, body: { ...(req.body || {}), aseguradora_id: aseguradoraId } });
+    const allowedPaises = await getAllowedPaisesForAseguradoraId(aseguradoraId);
+
+    let r;
+    try {
+      r = await tenantPool.query(
+        `
+        SELECT
+          to_char(date_trunc('month', fecha_alta), 'YYYY-MM') AS month,
+          COUNT(*)::int AS clientes,
+          COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total,
+          SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
+          COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
+        FROM clientes
+        WHERE pais = ANY($1::text[])
+          AND fecha_alta IS NOT NULL
+          AND fecha_alta >= $2::timestamptz
+          AND fecha_alta < $3::timestamptz
+        GROUP BY 1
+        ORDER BY 1 ASC
+        `,
+        [allowedPaises, fromIso, toIso]
+      );
+    } catch (err) {
+      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
+        await ensureTenantClientesPaisSchema(tenantPool);
+        r = await tenantPool.query(
+          `
+          SELECT
+            to_char(date_trunc('month', fecha_alta), 'YYYY-MM') AS month,
+            COUNT(*)::int AS clientes,
+            COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total,
+            SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
+            COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
+          FROM clientes
+          WHERE pais = ANY($1::text[])
+            AND fecha_alta IS NOT NULL
+            AND fecha_alta >= $2::timestamptz
+            AND fecha_alta < $3::timestamptz
+          GROUP BY 1
+          ORDER BY 1 ASC
+          `,
+          [allowedPaises, fromIso, toIso]
+        );
+      } else {
+        throw err;
+      }
+    }
+
+    const rows = Array.isArray(r.rows) ? r.rows : [];
+    const format = String(req.query?.format || "json").toLowerCase();
+    if (format === "csv") {
+      return sendCsvResponse(res, "financial_monthly_v1.csv", rows, [
+        "month",
+        "clientes",
+        "monto_total",
+        "clientes_cuota_si",
+        "monto_cobrado",
+      ]);
+    }
+
+    return res.json({
+      status: "success",
+      contract_version: REPORT_CONTRACT_VERSION,
+      from: fromIso,
+      to: toIso,
+      rows,
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err?.message || String(err) });
+  }
+});
+
+app.post("/api/reports/portfolio/line-status", async (req, res) => {
+  try {
+    const aseguradoraId = req.body?.aseguradora_id;
+    if (!aseguradoraId) return res.status(400).json({ status: "error", message: "aseguradora_id requerido" });
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    if (!canAccessAseguradora(req, aseguradoraId)) {
+      return res.status(401).json({ status: "error", message: "No autorizado" });
+    }
+
+    const to = parseDateFromReq(req.body?.to) || new Date();
+    const from = parseDateFromReq(req.body?.from) || new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    const fromIso = toIsoOrNull(from);
+    const toIso = toIsoOrNull(to);
+    if (!fromIso || !toIso) return res.status(400).json({ status: "error", message: "from/to inválidos" });
+
+    const tenantPool = await getTenantPoolFromReq({ ...req, body: { ...(req.body || {}), aseguradora_id: aseguradoraId } });
+    const allowedPaises = await getAllowedPaisesForAseguradoraId(aseguradoraId);
+
+    const lineaExpr = `
+      CASE
+        WHEN (LOWER(COALESCE(descripcion_seguro,'')) || ' ' || LOWER(COALESCE(polizas,''))) ~ '(\\bauto\\b|veh[ií]c|\\bcar\\b|\\bcoche\\b|\\bmoto\\b|\\bpatente\\b)' THEN 'AUTO'
+        WHEN (LOWER(COALESCE(descripcion_seguro,'')) || ' ' || LOWER(COALESCE(polizas,''))) ~ '(\\bvida\\b|fallec|benefici|\\binvalidez\\b)' THEN 'VIDA'
+        ELSE 'OTRO'
+      END
+    `;
+
+    let r;
+    try {
+      r = await tenantPool.query(
+        `
+        SELECT
+          ${lineaExpr} AS linea,
+          COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
+          COUNT(*)::int AS clientes,
+          COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total
+        FROM clientes
+        WHERE pais = ANY($1::text[])
+          AND fecha_alta IS NOT NULL
+          AND fecha_alta >= $2::timestamptz
+          AND fecha_alta < $3::timestamptz
+        GROUP BY 1, 2
+        ORDER BY 1 ASC, 2 ASC
+        `,
+        [allowedPaises, fromIso, toIso]
+      );
+    } catch (err) {
+      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
+        await ensureTenantClientesPaisSchema(tenantPool);
+        r = await tenantPool.query(
+          `
+          SELECT
+            ${lineaExpr} AS linea,
+            COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
+            COUNT(*)::int AS clientes,
+            COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total
+          FROM clientes
+          WHERE pais = ANY($1::text[])
+            AND fecha_alta IS NOT NULL
+            AND fecha_alta >= $2::timestamptz
+            AND fecha_alta < $3::timestamptz
+          GROUP BY 1, 2
+          ORDER BY 1 ASC, 2 ASC
+          `,
+          [allowedPaises, fromIso, toIso]
+        );
+      } else {
+        throw err;
+      }
+    }
+
+    const rows = Array.isArray(r.rows) ? r.rows : [];
+    const format = String(req.query?.format || "json").toLowerCase();
+    if (format === "csv") {
+      return sendCsvResponse(res, "portfolio_line_status_v1.csv", rows, ["linea", "cuota_paga", "clientes", "monto_total"]);
+    }
+
+    return res.json({
+      status: "success",
+      contract_version: REPORT_CONTRACT_VERSION,
+      from: fromIso,
+      to: toIso,
+      rows,
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err?.message || String(err) });
+  }
+});
+
+app.post("/api/reports/portfolio/expirations", async (req, res) => {
+  try {
+    const aseguradoraId = req.body?.aseguradora_id;
+    if (!aseguradoraId) return res.status(400).json({ status: "error", message: "aseguradora_id requerido" });
+    if (!dbConnected) return res.status(503).json({ status: "error", message: "DB no disponible" });
+
+    if (!canAccessAseguradora(req, aseguradoraId)) {
+      return res.status(401).json({ status: "error", message: "No autorizado" });
+    }
+
+    const daysRaw = Number(req.body?.days ?? 30);
+    const days = Number.isFinite(daysRaw) ? Math.min(Math.max(Math.floor(daysRaw), 1), 365) : 30;
+
+    const tenantPool = await getTenantPoolFromReq({ ...req, body: { ...(req.body || {}), aseguradora_id: aseguradoraId } });
+    const allowedPaises = await getAllowedPaisesForAseguradoraId(aseguradoraId);
+
+    const fechaFinStrExpr = "SUBSTRING(COALESCE(fecha_fin_str,''), 1, 10)";
+
+    let r;
+    try {
+      r = await tenantPool.query(
+        `
+        SELECT
+          id,
+          pais,
+          COALESCE(nombre,'') AS nombre,
+          COALESCE(apellido,'') AS apellido,
+          COALESCE(documento,'') AS documento,
+          COALESCE(telefono,'') AS telefono,
+          COALESCE(mail,'') AS mail,
+          ${fechaFinStrExpr} AS fecha_fin,
+          ((${fechaFinStrExpr})::date - CURRENT_DATE)::int AS days_left,
+          monto,
+          COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
+          COALESCE(descripcion_seguro,'') AS descripcion_seguro,
+          COALESCE(polizas,'') AS polizas
+        FROM clientes
+        WHERE pais = ANY($1::text[])
+          AND ${fechaFinStrExpr} ~ '^\\d{4}-\\d{2}-\\d{2}$'
+          AND (${fechaFinStrExpr})::date >= CURRENT_DATE
+          AND (${fechaFinStrExpr})::date <= (CURRENT_DATE + ($2::int * INTERVAL '1 day'))
+        ORDER BY (${fechaFinStrExpr})::date ASC
+        LIMIT 2000
+        `,
+        [allowedPaises, days]
+      );
+    } catch (err) {
+      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
+        await ensureTenantClientesPaisSchema(tenantPool);
+        r = await tenantPool.query(
+          `
+          SELECT
+            id,
+            pais,
+            COALESCE(nombre,'') AS nombre,
+            COALESCE(apellido,'') AS apellido,
+            COALESCE(documento,'') AS documento,
+            COALESCE(telefono,'') AS telefono,
+            COALESCE(mail,'') AS mail,
+            ${fechaFinStrExpr} AS fecha_fin,
+            ((${fechaFinStrExpr})::date - CURRENT_DATE)::int AS days_left,
+            monto,
+            COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
+            COALESCE(descripcion_seguro,'') AS descripcion_seguro,
+            COALESCE(polizas,'') AS polizas
+          FROM clientes
+          WHERE pais = ANY($1::text[])
+            AND ${fechaFinStrExpr} ~ '^\\d{4}-\\d{2}-\\d{2}$'
+            AND (${fechaFinStrExpr})::date >= CURRENT_DATE
+            AND (${fechaFinStrExpr})::date <= (CURRENT_DATE + ($2::int * INTERVAL '1 day'))
+          ORDER BY (${fechaFinStrExpr})::date ASC
+          LIMIT 2000
+          `,
+          [allowedPaises, days]
+        );
+      } else {
+        throw err;
+      }
+    }
+
+    const rows = Array.isArray(r.rows) ? r.rows : [];
+    const format = String(req.query?.format || "json").toLowerCase();
+    if (format === "csv") {
+      return sendCsvResponse(res, "portfolio_expirations_v1.csv", rows, [
+        "id",
+        "pais",
+        "nombre",
+        "apellido",
+        "documento",
+        "telefono",
+        "mail",
+        "fecha_fin",
+        "days_left",
+        "monto",
+        "cuota_paga",
+        "descripcion_seguro",
+        "polizas",
+      ]);
+    }
+
+    return res.json({
+      status: "success",
+      contract_version: REPORT_CONTRACT_VERSION,
+      days,
+      rows,
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err?.message || String(err) });
+  }
 });
 
 // ===== AUTH: LOGIN PASO 1 (email/password) =====
@@ -2454,7 +3604,7 @@ app.post("/api/clientes/add", async (req, res) => {
     try {
       result = await tenantPool.query(sql, params);
     } catch (err) {
-      if (String(err?.code) === "42703" || /column\s+\"pais\"\s+does not exist/i.test(String(err?.message || ""))) {
+      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
         await ensureTenantClientesPaisSchema(tenantPool);
         result = await tenantPool.query(sql, params);
       } else {
@@ -2485,7 +3635,7 @@ app.post("/api/clientes/get", async (req, res) => {
       );
     } catch (err) {
       // Tenant DB vieja sin columna pais: migrar y reintentar.
-      if (String(err?.code) === "42703" || /column\s+\"pais\"\s+does not exist/i.test(String(err?.message || ""))) {
+      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
         await ensureTenantClientesPaisSchema(tenantPool);
         result = await tenantPool.query(
           "SELECT * FROM clientes WHERE pais = ANY($1::text[]) ORDER BY fecha_alta DESC, id DESC",
@@ -2554,7 +3704,7 @@ app.post("/api/clientes/update", async (req, res) => {
     try {
       result = await tenantPool.query(sql, values);
     } catch (err) {
-      if (String(err?.code) === "42703" || /column\s+\"pais\"\s+does not exist/i.test(String(err?.message || ""))) {
+      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
         await ensureTenantClientesPaisSchema(tenantPool);
         result = await tenantPool.query(sql, values);
       } else {
@@ -2588,7 +3738,7 @@ app.post("/api/clientes/delete", async (req, res) => {
         allowedPaises,
       ]);
     } catch (err) {
-      if (String(err?.code) === "42703" || /column\s+\"pais\"\s+does not exist/i.test(String(err?.message || ""))) {
+      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
         await ensureTenantClientesPaisSchema(tenantPool);
         result = await tenantPool.query("DELETE FROM clientes WHERE id = $1 AND pais = ANY($2::text[])", [
           Number(id),
@@ -2674,7 +3824,8 @@ app.post("/api/cliente/send-code", async (req, res) => {
     }
 
     const normalizedDni = normalizeDigits(dni);
-    const key = `${Number(aseguradora_id)}:${normalizedDni}`;
+    const aseguradoraKey = String(aseguradora_id ?? "").trim();
+    const key = `${aseguradoraKey}:${normalizedDni}`;
 
     const last = clientLoginCooldown.get(key) || 0;
     if (Date.now() - last < 60_000) {
@@ -2701,7 +3852,7 @@ app.post("/api/cliente/send-code", async (req, res) => {
       });
     }
 
-    const purpose = `client:${Number(aseguradora_id)}:${normalizedDni}`;
+    const purpose = `client:${aseguradoraKey}:${normalizedDni}`;
 
     let emailWarning = "";
     if (dbConnected) {
@@ -2738,9 +3889,10 @@ app.post("/api/cliente/verify-code", async (req, res) => {
     if (!code) return res.status(400).json({ status: "error", message: "Código requerido" });
 
     const normalizedDni = normalizeDigits(dni);
-    const key = `${Number(aseguradora_id)}:${normalizedDni}`;
+    const aseguradoraKey = String(aseguradora_id ?? "").trim();
+    const key = `${aseguradoraKey}:${normalizedDni}`;
 
-    const purpose = `client:${Number(aseguradora_id)}:${normalizedDni}`;
+    const purpose = `client:${aseguradoraKey}:${normalizedDni}`;
 
     let v;
     if (dbConnected) {
@@ -2766,7 +3918,7 @@ app.post("/api/cliente/verify-code", async (req, res) => {
     clientLoginPending.delete(key);
 
     const token = jwt.sign(
-      { type: "client", aseguradora_id: Number(aseguradora_id), dni: normalizedDni },
+      { type: "client", aseguradora_id: aseguradoraKey, dni: normalizedDni },
       jwtSecret,
       { expiresIn: "12h" }
     );
@@ -2806,7 +3958,7 @@ app.post("/api/cliente/by-dni", async (req, res) => {
     if (decoded?.type !== "client") {
       return res.status(401).json({ status: "error", message: "Token inválido" });
     }
-    if (Number(decoded.aseguradora_id) !== Number(aseguradora_id)) {
+    if (String(decoded.aseguradora_id) !== String(aseguradora_id)) {
       return res.status(401).json({ status: "error", message: "Token no corresponde a esta aseguradora" });
     }
     if (String(decoded.dni) !== String(normalized)) {
@@ -3028,7 +4180,8 @@ const wppSseClientsByAsegId = new Map(); // aseguradora_id -> Set(res)
 
 const wppBroadcast = (aseguradoraId, payload) => {
   try {
-    const key = String(Number(aseguradoraId));
+    const key = String(aseguradoraId ?? "").trim();
+    if (!key) return;
     const set = wppSseClientsByAsegId.get(key);
     if (!set || set.size === 0) return;
     const data = `data: ${JSON.stringify(payload)}\n\n`;
@@ -3506,8 +4659,8 @@ app.get("/api/whatsapp/debug/status", async (req, res) => {
 
 app.get("/api/whatsapp/stream", async (req, res) => {
   try {
-    const aseguradoraId = Number(req.query?.aseguradora_id);
-    if (!Number.isFinite(aseguradoraId)) {
+    const aseguradoraId = String(req.query?.aseguradora_id ?? "").trim();
+    if (!aseguradoraId) {
       return res.status(400).end();
     }
 
@@ -5043,14 +6196,14 @@ app.post("/api/admin/migrate/whatsapp-inbox", async (req, res) => {
     const results = [];
 
     for (const u of rows) {
-      const userId = Number(u?.id);
-      if (!Number.isFinite(userId)) continue;
+      const userId = String(u?.id ?? "").trim();
+      if (!userId) continue;
 
       let tenantDb = String(u?.tenant_db || "").trim();
       if (!tenantDb) {
         tenantDb = getTenantDbNameForUserId(userId);
         // persistir para que el backend use siempre el mismo nombre
-        await pool.query("UPDATE usuarios SET tenant_db = $1 WHERE id = $2", [tenantDb, userId]).catch(() => {});
+        await pool.query("UPDATE usuarios SET tenant_db = $1 WHERE id::text = $2", [tenantDb, userId]).catch(() => {});
       }
 
       try {
@@ -5179,6 +6332,85 @@ app.post("/api/admin/migrate/whatsapp-inbox", async (req, res) => {
         results,
       },
     });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== ADMIN (DEV): APLICAR TODO DB (setup-db + migrate --tenants) =====
+// Pensado para entorno dev/staging con UI: evita que tengas que tocar la base a mano.
+// En producción está BLOQUEADO por defecto; para habilitar: ALLOW_ADMIN_DB_APPLY=1
+app.post("/api/admin/db/apply-all", async (req, res) => {
+  try {
+    const admin = await requireAdminAccess(req);
+    if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
+
+    const isProd = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
+    const allowInProd = isTruthy(process.env.ALLOW_ADMIN_DB_APPLY || "");
+    if (isProd && !allowInProd) {
+      return res.status(403).json({
+        status: "error",
+        message: "Bloqueado en producción. Seteá ALLOW_ADMIN_DB_APPLY=1 si realmente querés habilitarlo.",
+      });
+    }
+
+    const b = req.body || {};
+
+    const resetDb = b.reset_db === true;
+    const seedTestData = b.seed_test_data === true;
+    // Por defecto: intentamos crear DBs tenant faltantes (one-click). Para desactivar: { create_tenants: false }
+    const createTenants = b.create_tenants !== false;
+    const baseline = b.baseline === true;
+    const dryRun = b.dry_run === true;
+
+    const steps = [];
+
+    // 1) setup-db: asegura DB master (sin schema legacy)
+    const setup = await runNodeScriptCapture({
+      scriptPath: "setup-db.js",
+      scriptArgs: [],
+      env: {
+        SETUP_DB_SKIP_SCHEMA: "1",
+        ...(resetDb ? { RESET_DB: "1" } : {}),
+        ...(seedTestData ? { SEED_TEST_DATA: "1" } : {}),
+      },
+      timeoutMs: 6 * 60 * 1000,
+    });
+    steps.push({ name: "setup-db", ...setup, output_preview: String(setup.output || "").slice(-4000) });
+
+    if (!setup.ok) {
+      return res.status(500).json({
+        status: "error",
+        message: "Falló setup-db",
+        data: { steps },
+      });
+    }
+
+    // 2) migrate master + tenants
+    const migrateArgs = [];
+    if (baseline) migrateArgs.push("--baseline");
+    if (dryRun) migrateArgs.push("--dry-run");
+    migrateArgs.push("--tenants");
+
+    const migrate = await runNodeScriptCapture({
+      scriptPath: "migrate.js",
+      scriptArgs: migrateArgs,
+      env: {
+        ...(createTenants ? { MIGRATE_CREATE_TENANTS: "1" } : {}),
+      },
+      timeoutMs: 10 * 60 * 1000,
+    });
+    steps.push({ name: "migrate", ...migrate, output_preview: String(migrate.output || "").slice(-4000) });
+
+    if (!migrate.ok) {
+      return res.status(500).json({
+        status: "error",
+        message: "Falló migrate",
+        data: { steps },
+      });
+    }
+
+    return res.json({ status: "success", data: { steps } });
   } catch (err) {
     return res.status(500).json({ status: "error", message: err.message });
   }
@@ -5500,14 +6732,10 @@ app.post("/send-code", async (req, res) => {
 
 app.post("/verify-code", async (req, res) => {
   try {
-    const { email, code, pais } = req.body;
+    const { email, code } = req.body;
     if (!email || !code) return res.status(400).json({ status: "error", message: "Email y código requeridos" });
 
     const emailRaw = String(email || "").trim();
-
-    const paisNorm = ["AR", "UY"].includes(String(pais || "").toUpperCase())
-      ? String(pais).toUpperCase()
-      : "AR";
 
     if (dbConnected) {
       const purpose = `aseg_login:${normalizeEmailLower(emailRaw)}`;
@@ -5564,11 +6792,426 @@ app.post("/verify-code", async (req, res) => {
   }
 });
 
+// ===== SCORING API (Sprint 3) =====
+app.get("/api/scoring/rule-sets", async (req, res) => {
+  try {
+    const access = await resolveScoringActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const sets = await listRuleSets(access.tenantPool);
+    return res.json({ status: "success", rule_sets: sets });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.get("/api/scoring/rule-sets/:id", async (req, res) => {
+  try {
+    const access = await resolveScoringActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const out = await getRuleSetWithRules(access.tenantPool, { ruleSetId: req.params.id });
+    return res.json({ status: "success", ...out });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/scoring/rule-sets", async (req, res) => {
+  try {
+    const access = await resolveScoringActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const b = req.body || {};
+    const created = await upsertRuleSet(access.tenantPool, {
+      key: b.key,
+      name: b.name,
+      description: b.description,
+      config: b.config,
+      rules: b.rules,
+      activate: !!b.activate,
+    });
+
+    return res.json({ status: "success", created });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/scoring/rule-sets/:id/activate", async (req, res) => {
+  try {
+    const access = await resolveScoringActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const active = await activateRuleSet(access.tenantPool, { ruleSetId: req.params.id });
+    return res.json({ status: "success", active });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/scoring/score", async (req, res) => {
+  try {
+    const access = await resolveScoringActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const b = req.body || {};
+    if (!b.cliente_id) {
+      return res.status(400).json({ status: "error", message: "cliente_id requerido" });
+    }
+
+    const out = await scoreCliente({
+      tenantPool: access.tenantPool,
+      clienteId: b.cliente_id,
+      asOfDate: b.as_of_date,
+      ruleSetId: b.rule_set_id,
+      persist: b.persist === false ? false : true,
+      actor: access.actor,
+    });
+
+    return res.json({ status: "success", ...out });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.get("/api/scoring/runs", async (req, res) => {
+  try {
+    const access = await resolveScoringActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const runs = await listScoringRuns(access.tenantPool, {
+      clienteId: req.query?.cliente_id,
+      limit: req.query?.limit,
+    });
+    return res.json({ status: "success", runs });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.get("/api/scoring/runs/:run_uuid", async (req, res) => {
+  try {
+    const access = await resolveScoringActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const out = await getScoringRun(access.tenantPool, { runUuid: req.params.run_uuid });
+    return res.json({ status: "success", ...out });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== AUDIENCES API (Sprint 4) =====
+app.get("/api/audiences/definitions", async (req, res) => {
+  try {
+    const access = await resolveAudienceActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const defs = await listAudienceDefinitions(access.tenantPool);
+    return res.json({ status: "success", definitions: defs });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/audiences/definitions", async (req, res) => {
+  try {
+    const access = await resolveAudienceActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const b = req.body || {};
+    const created = await upsertAudienceDefinition(access.tenantPool, {
+      key: b.key,
+      name: b.name,
+      description: b.description,
+      filter: b.filter,
+      activate: b.activate,
+    });
+
+    return res.json({ status: "success", created });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/audiences/run", async (req, res) => {
+  try {
+    const access = await resolveAudienceActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const b = req.body || {};
+    const out = await runAudience({
+      tenantPool: access.tenantPool,
+      definitionId: b.definition_id,
+      filterOverride: b.filter,
+      asOfDate: b.as_of_date,
+      persist: b.persist === false ? false : true,
+      actor: access.actor,
+    });
+
+    return res.json({ status: "success", ...out });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.get("/api/audiences/runs", async (req, res) => {
+  try {
+    const access = await resolveAudienceActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const runs = await listAudienceRuns(access.tenantPool, {
+      definitionId: req.query?.definition_id,
+      limit: req.query?.limit,
+    });
+
+    return res.json({ status: "success", runs });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.get("/api/audiences/runs/:run_uuid/members", async (req, res) => {
+  try {
+    const access = await resolveAudienceActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const out = await getAudienceRunMembers(access.tenantPool, {
+      runUuid: req.params.run_uuid,
+      limit: req.query?.limit,
+      offset: req.query?.offset,
+    });
+
+    return res.json({ status: "success", ...out });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== CAMPAIGNS API (Sprint 4) =====
+app.get("/api/campaigns", async (req, res) => {
+  try {
+    const access = await resolveAudienceActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const campaigns = await listCampaigns(access.tenantPool, { limit: req.query?.limit });
+    return res.json({ status: "success", campaigns });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/campaigns", async (req, res) => {
+  try {
+    const access = await resolveAudienceActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const b = req.body || {};
+    const campaign = await createCampaign(access.tenantPool, {
+      key: b.key,
+      name: b.name,
+      line: b.line,
+      channel: b.channel,
+      budget: b.budget,
+      expectedValue: b.expected_value,
+      config: b.config,
+    });
+
+    return res.json({ status: "success", campaign });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/campaigns/:id/launch", async (req, res) => {
+  try {
+    const access = await resolveAudienceActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const b = req.body || {};
+    const launched = await launchCampaign(access.tenantPool, {
+      campaignId: req.params.id,
+      audienceRunUuid: b.audience_run_uuid,
+    });
+
+    return res.json({ status: "success", ...launched });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== NOTIFICATIONS API (Sprint 5) =====
+app.get("/api/notifications/templates", async (req, res) => {
+  try {
+    const access = await resolveNotificationsActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const templates = await listNotificationTemplates(access.tenantPool);
+    return res.json({ status: "success", templates });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/notifications/templates", async (req, res) => {
+  try {
+    const access = await resolveNotificationsActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const b = req.body || {};
+    const created = await upsertNotificationTemplate(access.tenantPool, {
+      key: b.key,
+      channel: b.channel,
+      name: b.name,
+      bodyTemplate: b.body_template ?? b.bodyTemplate,
+      config: b.config,
+      isActive: b.is_active,
+    });
+
+    return res.json({ status: "success", created });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.get("/api/notifications/triggers", async (req, res) => {
+  try {
+    const access = await resolveNotificationsActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const triggers = await listNotificationTriggers(access.tenantPool);
+    return res.json({ status: "success", triggers });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/notifications/triggers", async (req, res) => {
+  try {
+    const access = await resolveNotificationsActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const b = req.body || {};
+    const created = await upsertNotificationTrigger(access.tenantPool, {
+      key: b.key,
+      name: b.name,
+      description: b.description,
+      channel: b.channel,
+      templateKey: b.template_key ?? b.templateKey,
+      filter: b.filter,
+      cooldownSec: b.cooldown_sec ?? b.cooldownSec,
+      maxRetries: b.max_retries ?? b.maxRetries,
+      retryBackoffSec: b.retry_backoff_sec ?? b.retryBackoffSec,
+      isActive: b.is_active,
+    });
+
+    return res.json({ status: "success", created });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/notifications/detect-enqueue", async (req, res) => {
+  try {
+    const access = await resolveNotificationsActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const b = req.body || {};
+    const out = await detectAndEnqueueNotifications({
+      tenantPool: access.tenantPool,
+      triggerKey: b.trigger_key,
+      asOfDate: b.as_of_date,
+      dryRun: b.dry_run === false ? false : true,
+      max: b.max,
+      actor: access.actor,
+    });
+
+    return res.json({ status: "success", ...out });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+app.post("/api/notifications/process", async (req, res) => {
+  try {
+    const access = await resolveNotificationsActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const b = req.body || {};
+    const dryRun = b.dry_run === true;
+    const maxJobs = b.max_jobs ?? b.maxJobs;
+
+    const aseguradoraId = Number(access.aseguradoraId);
+    if (!Number.isFinite(aseguradoraId)) {
+      return res.status(400).json({ status: "error", message: "aseguradora_id inválido" });
+    }
+
+    if (dryRun) {
+      const lim = Math.min(Math.max(Number(maxJobs) || 50, 1), 200);
+      const r = await access.tenantPool.query(
+        `
+        SELECT job_uuid, status, trigger_key, cliente_id, to_phone, next_attempt_at, attempts
+        FROM notification_jobs
+        WHERE status IN ('QUEUED','RETRY')
+          AND next_attempt_at <= NOW()
+        ORDER BY next_attempt_at ASC, id ASC
+        LIMIT $1
+        `,
+        [lim]
+      );
+      const processed = (r.rows || []).map((x) => ({ job_uuid: x.job_uuid, status: x.status }));
+      return res.json({ status: "success", dry_run: true, processed });
+    }
+
+    const sendFn = async ({ to, payload }) => {
+      const msg = safeTrim(payload?.body || payload?.message || "");
+      if (!to || !msg) throw new Error("payload inválido: faltan to/body");
+      return sendWhatsAppText(req, {
+        aseguradora_id: aseguradoraId,
+        to,
+        message: msg,
+        actor: "sistema",
+        type: "text",
+      });
+    };
+
+    const out = await processNotificationQueue({
+      tenantPool: access.tenantPool,
+      maxJobs,
+      sendFn,
+      provider: "whatsapp_cloud",
+    });
+
+    return res.json({ status: "success", ...out });
+  } catch (err) {
+    const code = Number(err?.statusCode) || 500;
+    return res.status(code).json(toSafeApiErrorBody(err));
+  }
+});
+
+app.get("/api/notifications/jobs", async (req, res) => {
+  try {
+    const access = await resolveNotificationsActorAndTenant(req);
+    if (!access.ok) return res.status(access.status || 401).json({ status: "error", message: access.message });
+
+    const jobs = await listNotificationJobs(access.tenantPool, {
+      status: req.query?.status,
+      limit: req.query?.limit,
+    });
+
+    return res.json({ status: "success", jobs });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
 // ===== SPA FALLBACK (React Router / rutas client-side) =====
 if (hasFrontendBuild) {
   app.get("*", (req, res, next) => {
     if (req.method !== "GET") return next();
     if (req.path.startsWith("/api")) return next();
+    if (req.path.startsWith("/v1")) return next();
     if (req.path === "/health") return next();
     if (req.path.includes(".")) return next();
 
@@ -5578,15 +7221,17 @@ if (hasFrontendBuild) {
 }
 
 // ===== ERROR HANDLER =====
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   console.error(err);
   res.status(500).json({ status: "error", message: err.message });
 });
 
 const PORT = process.env.PORT || 5000;
 // En contenedores/producción (EasyPanel), lo más compatible es escuchar en IPv4.
-// En dev local, '::' permite localhost (IPv6) y 127.0.0.1 (IPv4).
-const LISTEN_HOST = String(process.env.HOST || "").trim() || (isProd() ? "0.0.0.0" : "::");
+// En Windows dev, preferimos IPv4 para evitar casos donde localhost resuelve a IPv6-only.
+// Si querés forzar: seteá HOST explícitamente.
+const defaultDevHost = process.platform === "win32" ? "0.0.0.0" : "::";
+const LISTEN_HOST = String(process.env.HOST || "").trim() || (isProd() ? "0.0.0.0" : defaultDevHost);
 const server = app.listen(PORT, LISTEN_HOST, () => {
   const hostLabel = LISTEN_HOST === "0.0.0.0" ? "0.0.0.0" : "localhost";
   console.log(`🚀 Backend SegurosPro en http://${hostLabel}:${PORT}`);

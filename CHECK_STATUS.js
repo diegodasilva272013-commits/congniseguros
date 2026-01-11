@@ -28,6 +28,11 @@ requiredEnvVars.forEach((varName) => {
   if (!value) envOk = false;
 });
 
+if (!envOk) {
+  console.log("\n⚠️  Faltan variables de entorno requeridas. Revisá tu .env.");
+  process.exitCode = 1;
+}
+
 // 2. Verificar conexión PostgreSQL
 console.log("\n🗄️  CONEXIÓN A POSTGRESQL:");
 
