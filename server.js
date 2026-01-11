@@ -13,8 +13,8 @@ import path from "path";
 
 // NOTE: scoring-engine is optional at runtime (some deploy setups mount /app and may omit files).
 // We load it dynamically so the whole server doesn't crash if it's missing.
-let scoringEngineAvailable = false;
-let scoringEngineLoadError = null;
+let _scoringEngineAvailable = false;
+let _scoringEngineLoadError = null;
 
 let activateRuleSet = async () => {
   const e = new Error("Scoring engine no disponible");
@@ -65,9 +65,9 @@ try {
   listScoringRuns = scoring.listScoringRuns;
   scoreCliente = scoring.scoreCliente;
   upsertRuleSet = scoring.upsertRuleSet;
-  scoringEngineAvailable = true;
+  _scoringEngineAvailable = true;
 } catch (err) {
-  scoringEngineLoadError = err;
+  _scoringEngineLoadError = err;
   console.warn("[scoring] scoring-engine.js no disponible; SCORING deshabilitado:", err?.message || err);
 }
 import {

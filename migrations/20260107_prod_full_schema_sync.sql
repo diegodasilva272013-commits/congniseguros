@@ -69,6 +69,48 @@ CREATE TABLE IF NOT EXISTS clientes (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Compat: DBs viejas (setup-db legacy) pueden tener clientes sin aseguradora_id/documento/mail
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS aseguradora_id UUID;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS documento VARCHAR(20);
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS mail VARCHAR(255);
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono VARCHAR(20);
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS nombre VARCHAR(255);
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS apellido VARCHAR(255);
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS cuota_paga VARCHAR(10) DEFAULT 'NO';
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS monto DECIMAL(10, 2);
+
+-- Backfills suaves (no destruyen data)
+DO $$
+BEGIN
+  IF to_regclass('clientes') IS NOT NULL THEN
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'clientes' AND column_name = 'cedula'
+    ) THEN
+      UPDATE clientes SET documento = cedula
+      WHERE (documento IS NULL OR TRIM(documento) = '') AND cedula IS NOT NULL AND TRIM(cedula) <> '';
+    END IF;
+
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'clientes' AND column_name = 'email'
+    ) THEN
+      UPDATE clientes SET mail = email
+      WHERE (mail IS NULL OR TRIM(mail) = '') AND email IS NOT NULL AND TRIM(email) <> '';
+    END IF;
+
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'clientes' AND column_name = 'usuario_id'
+    ) THEN
+      -- Best-effort: si la instalación legacy guardaba usuario_id numérico,
+      -- no podemos mapearlo a UUID sin una tabla de equivalencias.
+      -- Dejamos aseguradora_id NULL para no romper la migración.
+      NULL;
+    END IF;
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_clientes_aseguradora ON clientes(aseguradora_id);
 CREATE INDEX IF NOT EXISTS idx_clientes_documento ON clientes(documento);
 
