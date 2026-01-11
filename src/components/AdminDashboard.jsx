@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Users,
   Gift,
@@ -18,6 +18,8 @@ export default function AdminDashboard() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [migratingWpp, setMigratingWpp] = useState(false);
+  const [applyingDb, setApplyingDb] = useState(false);
+  const [applyDbLog, setApplyDbLog] = useState("");
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [modalData, setModalData] = useState({});
@@ -49,32 +51,7 @@ export default function AdminDashboard() {
     return out.join(",");
   };
 
-  // Cargar datos según la pestaña activa
-  useEffect(() => {
-    loadData();
-  }, [tab]);
-
-  // Inicializa estado de edición de usuarios al cargar datos
-  useEffect(() => {
-    if (tab !== "usuarios") return;
-    setUserEdits((prev) => {
-      const next = { ...prev };
-      for (const u of Array.isArray(data) ? data : []) {
-        if (!u?.id) continue;
-        if (next[u.id]) continue;
-        const pais = normalizePais(u.pais);
-        next[u.id] = {
-          pais,
-          flags: flagsFromPaises(u.paises, pais),
-          saving: false,
-        };
-      }
-      return next;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, data]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       let endpoint = "";
@@ -145,7 +122,32 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [tab]);
+
+  // Cargar datos según la pestaña activa
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Inicializa estado de edición de usuarios al cargar datos
+  useEffect(() => {
+    if (tab !== "usuarios") return;
+    setUserEdits((prev) => {
+      const next = { ...prev };
+      for (const u of Array.isArray(data) ? data : []) {
+        if (!u?.id) continue;
+        if (next[u.id]) continue;
+        const pais = normalizePais(u.pais);
+        next[u.id] = {
+          pais,
+          flags: flagsFromPaises(u.paises, pais),
+          saving: false,
+        };
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, data]);
 
   const handleSaveUserPaises = async (userId) => {
     const edit = userEdits[userId];
@@ -432,6 +434,55 @@ export default function AdminDashboard() {
     }
   };
 
+  const applyDbAll = async () => {
+    if (!window.confirm("Esto ejecuta setup-db + migrate (master + tenants). ¿Continuar?")) return;
+    setApplyingDb(true);
+    setApplyDbLog("");
+    try {
+      const token = sessionStorage.getItem("token");
+      if (!token) {
+        alert("Sesión vencida. Volvé a ingresar al Admin.");
+        return;
+      }
+
+      const res = await fetch("/api/admin/db/apply-all", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          dry_run: false,
+          baseline: false,
+          create_tenants: true,
+        }),
+      });
+
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || result.status !== "success") {
+        const steps = result?.data?.steps || [];
+        const text = steps
+          .map((s) => `# ${s.name} (ok=${!!s.ok} code=${s.code})\n${s.output_preview || s.output || ""}`)
+          .join("\n\n");
+        setApplyDbLog(text || result.message || "No se pudo aplicar DB");
+        alert(result.message || "No se pudo aplicar DB");
+        return;
+      }
+
+      const steps = result?.data?.steps || [];
+      const text = steps
+        .map((s) => `# ${s.name} (ok=${!!s.ok} code=${s.code} ms=${s.ms})\n${s.output_preview || s.output || ""}`)
+        .join("\n\n");
+      setApplyDbLog(text);
+      alert("DB aplicada OK (setup-db + migrate)");
+    } catch (err) {
+      setApplyDbLog(String(err?.message || err));
+      alert("Error: " + (err?.message || String(err)));
+    } finally {
+      setApplyingDb(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-100">
       {/* Header */}
@@ -443,6 +494,16 @@ export default function AdminDashboard() {
           <div className="mt-4">
             <button
               type="button"
+              onClick={applyDbAll}
+              disabled={applyingDb}
+              className={`px-4 py-2 rounded text-white font-bold mr-3 ${
+                applyingDb ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"
+              }`}
+            >
+              {applyingDb ? "Aplicando DB..." : "Aplicar DB (setup + migrate)"}
+            </button>
+            <button
+              type="button"
               onClick={migrateWhatsappInboxAllTenants}
               disabled={migratingWpp}
               className={`px-4 py-2 rounded text-white font-bold ${
@@ -451,6 +512,12 @@ export default function AdminDashboard() {
             >
               {migratingWpp ? "Migrando WhatsApp Inbox..." : "Migrar WhatsApp Inbox (todos los tenants)"}
             </button>
+
+            {applyDbLog ? (
+              <pre className="mt-4 p-3 bg-slate-900 text-slate-100 rounded text-xs overflow-auto max-h-72 whitespace-pre-wrap">
+                {applyDbLog}
+              </pre>
+            ) : null}
           </div>
         </div>
       </div>

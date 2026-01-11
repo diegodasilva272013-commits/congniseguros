@@ -24,7 +24,6 @@ import {
   Edit3,
   Trash2,
   Eye,
-  EyeOff,
   Download,
   MessageCircle,
   Loader2,
@@ -84,12 +83,16 @@ const loadPersistedState = () => {
 const savePersistedState = (obj) => {
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
-  } catch {}
+  } catch {
+    // ignore
+  }
 };
 const clearPersistedState = () => {
   try {
     sessionStorage.removeItem(STORAGE_KEY);
-  } catch {}
+  } catch {
+    // ignore
+  }
 };
 
 const formatDateForInput = (dateStr) => {
@@ -211,13 +214,6 @@ const openWhatsAppManual = (telefono, msg) => {
     "_blank",
     "noopener,noreferrer"
   );
-};
-
-// ⚠️ Se deja helper, pero NO se usa porque eliminamos los botones "Llamar"
-const callPhone = (telefono) => {
-  const to = normalizePhoneDigits(telefono);
-  if (!to) return alert("Teléfono inválido");
-  window.location.href = `tel:${to}`;
 };
 
 const openSupport = () => {
@@ -500,7 +496,6 @@ export default function App() {
 
   // Auth
   const [user, setUser] = useState(null);
-  const [showPassword, setShowPassword] = useState(false);
   const authFormRef = useRef(null);
 
   // Data
@@ -1096,6 +1091,15 @@ export default function App() {
     showMessage("Sesión de cliente cerrada.", "info");
   };
 
+  const resetClientPortalState = () => {
+    setClienteData(null);
+    setAsegPerfil(null);
+    setClienteChat([]);
+    setClienteMsg("");
+    setClienteDni("");
+    clearPersistedState();
+  };
+
   const speak = (text) => {
     try {
       if (!voiceOn) return;
@@ -1106,7 +1110,9 @@ export default function App() {
       u.pitch = 1;
       u.lang = "es-ES";
       window.speechSynthesis.speak(u);
-    } catch {}
+    } catch {
+      // ignore
+    }
   };
 
   const scrollChatToBottom = () => {
@@ -1188,7 +1194,9 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       try {
         stream.getTracks().forEach((t) => t.stop());
-      } catch {}
+      } catch {
+        // ignore
+      }
       localStorage.setItem(MIC_KEY, "1");
       return true;
     } catch {
@@ -1238,7 +1246,9 @@ export default function App() {
         // si ya estaba arrancado o quedó colgado, intentamos reset básico
         try {
           recRef.current.stop();
-        } catch {}
+        } catch {
+          // ignore
+        }
         try {
           recRef.current.start();
         } catch {

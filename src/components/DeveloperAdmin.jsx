@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Shield, LogOut, KeyRound, Loader2 } from "lucide-react";
 import AdminDashboard from "./AdminDashboard.jsx";
 

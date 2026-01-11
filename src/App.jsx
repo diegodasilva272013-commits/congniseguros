@@ -9,9 +9,13 @@
 // 6) ✅ NUEVO: MENÚ "PAGOS" (front) + filtros + WhatsApp manual/auto + Monto en cliente (front)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import AdminDashboard from "./components/AdminDashboard.jsx";
 import DeveloperAdmin from "./components/DeveloperAdmin.jsx";
-import * as XLSX from "xlsx";
+
+let __xlsxPromise = null;
+const getXlsx = async () => {
+  if (!__xlsxPromise) __xlsxPromise = import("xlsx");
+  return __xlsxPromise;
+};
 import {
   Shield,
   Users,
@@ -22,7 +26,6 @@ import {
   Edit3,
   Trash2,
   Eye,
-  EyeOff,
   Download,
   MessageCircle,
   Loader2,
@@ -50,8 +53,6 @@ import {
 } from "lucide-react";
 
 /* ================== CONFIG ================== */
-const API_URL =
-  "https://script.google.com/macros/s/AKfycbxQVq4hyugSoL8tnZDHqnllifiXqvnFPvi5SqMuqxet-wEmr4yz4Dgwt_LdFGEnthyDyA/exec";
 const SUPPORT_PHONE = "59892034193";
 
 // ✅ NUEVO: alias de pago (default)
@@ -69,7 +70,7 @@ const MIC_KEY = "segurospro_mic_granted_v1";
 
 const safeJsonParse = (s) => {
   try {
-      if (!rawRows.length) throw new Error("El archivo Excel está vacío.");
+    return JSON.parse(String(s || ""));
   } catch {
     return null;
   }
@@ -85,12 +86,16 @@ const loadPersistedState = () => {
 const savePersistedState = (obj) => {
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
-  } catch {}
+  } catch {
+    // ignore
+  }
 };
 const clearPersistedState = () => {
   try {
     sessionStorage.removeItem(STORAGE_KEY);
-  } catch {}
+  } catch {
+    // ignore
+  }
 };
 
 const formatDateForInput = (dateStr) => {
@@ -242,13 +247,6 @@ const openWhatsAppManual = (telefono, msg) => {
   );
 };
 
-// ⚠️ Se deja helper, pero NO se usa porque eliminamos los botones "Llamar"
-const callPhone = (telefono) => {
-  const to = normalizePhoneDigits(telefono);
-  if (!to) return alert("Teléfono inválido");
-  window.location.href = `tel:${to}`;
-};
-
 const openSupport = () => {
   const msg = "Hola, necesito ayuda con la configuración real de SegurosPro.";
   window.open(
@@ -306,15 +304,35 @@ async function request(payload) {
   
   const endpoint = endpointMap[action];
   if (!endpoint) throw new Error(`Acción no soportada: ${action}`);
-  
+
+  const token = (() => {
+    try {
+      return sessionStorage.getItem("token") || localStorage.getItem("token") || "";
+    } catch {
+      return "";
+    }
+  })();
+
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
   const res = await fetch(endpoint.url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(endpoint.body),
   });
   
   const data = await res.json();
   if (data?.status === "error") throw new Error(data.message || "Error");
+
+  // Persistimos token SOLO para login de aseguradora.
+  if (action === "login" && data?.token) {
+    try {
+      sessionStorage.setItem("token", String(data.token));
+    } catch {
+      // ignore
+    }
+  }
   return data;
 }
 
@@ -558,6 +576,22 @@ export default function App() {
   const [brandLogoOk, setBrandLogoOk] = useState(true);
 
   const [rootView, setRootView] = useState("home"); // home | aseguradoras | enterprise | clientes | devadmin
+  const [backendHealth, setBackendHealth] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/health")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) setBackendHealth(data);
+      })
+      .catch(() => {
+        if (!cancelled) setBackendHealth({ ok: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Aseguradoras
   const [mode, setMode] = useState("auth"); // auth | dashboard
@@ -610,7 +644,6 @@ export default function App() {
 
   // Auth
   const [user, setUser] = useState(null);
-  const [showPassword, setShowPassword] = useState(false);
   const [emailStep, setEmailStep] = useState(null); // null | "email" | "code"
   const [codeDigits, setCodeDigits] = useState(["", "", "", "", "", ""]);
   const authFormRef = useRef(null);
@@ -729,7 +762,7 @@ export default function App() {
   const perfilFotoInputRef = useRef(null);
   const [clienteMaskedEmail, setClienteMaskedEmail] = useState("");
   const [clienteCodeDigits, setClienteCodeDigits] = useState(["", "", "", "", "", ""]);
-  const [clienteToken, setClienteToken] = useState("");
+  const [, setClienteToken] = useState("");
   // loading por acción para que solo spinee el botón tocado
   const [clienteAction, setClienteAction] = useState(null); // null | 'lookup' | 'send' | 'verify'
   const [clienteData, setClienteData] = useState(null);
@@ -1159,12 +1192,6 @@ export default function App() {
     return p === "UY" ? "UY" : "AR";
   };
 
-  const filterByPais = (list, pais) => {
-    const target = normalizePaisCode(pais);
-    const arr = Array.isArray(list) ? list : [];
-    return arr.filter((c) => normalizePaisCode(c?.pais || target) === target);
-  };
-
   // Vista = lo que se muestra (no solo labels/colores).
   const filterByPaisVista = (list) => {
     const view = getPaisNorm();
@@ -1227,7 +1254,8 @@ export default function App() {
     }
   };
 
-  const writeSingleSheetXlsx = ({ headers, rows, sheetName, fileName }) => {
+  const writeSingleSheetXlsx = async ({ headers, rows, sheetName, fileName }) => {
+    const XLSX = await getXlsx();
     const aoa = [headers, ...rows];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     const wb = XLSX.utils.book_new();
@@ -1251,7 +1279,7 @@ export default function App() {
       .replace(/UYU/gi, "")
       .replace(/\./g, "")
       .replace(/,/g, ".")
-      .replace(/[^0-9.\-]/g, "");
+      .replace(/[^0-9.-]/g, "");
 
     if (!s1) return "";
     const n = Number(s1);
@@ -1259,7 +1287,7 @@ export default function App() {
     return String(n);
   };
 
-  const exportClientesExcel = ({ fileName, silent } = {}) => {
+  const exportClientesExcel = async ({ fileName, silent } = {}) => {
     try {
       const meta = getPaisMeta();
       const headers = [
@@ -1297,7 +1325,7 @@ export default function App() {
       ]);
 
       const stamp = makeDateStamp();
-      writeSingleSheetXlsx({
+      await writeSingleSheetXlsx({
         headers,
         rows,
         sheetName: "Clientes",
@@ -1348,7 +1376,7 @@ export default function App() {
       ]);
 
       const stamp = makeDateStamp();
-      writeSingleSheetXlsx({
+      await writeSingleSheetXlsx({
         headers,
         rows,
         sheetName: "Vencimientos",
@@ -1404,7 +1432,7 @@ export default function App() {
       });
 
       const stamp = makeDateStamp();
-      writeSingleSheetXlsx({
+      await writeSingleSheetXlsx({
         headers,
         rows,
         sheetName: "Pagos",
@@ -1419,6 +1447,7 @@ export default function App() {
 
   const downloadClientesExcelTemplate = async () => {
     try {
+      const XLSX = await getXlsx();
       const meta = getPaisMeta();
       const headers = [
         "Nombre",
@@ -1478,7 +1507,7 @@ export default function App() {
     // ✅ C) Importación segura: backup antes de aplicar cambios
     try {
       const stamp = makeDateStamp();
-      exportClientesExcel({
+      await exportClientesExcel({
         fileName: `backup_${excelImportContext}_clientes_${stamp.y}-${stamp.m}-${stamp.d}_${stamp.hh}${stamp.mm}.xlsx`,
         silent: true,
       });
@@ -1488,6 +1517,7 @@ export default function App() {
 
     setExcelBusy(true);
     try {
+      const XLSX = await getXlsx();
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
       const sheetName = wb.SheetNames?.[0];
@@ -1646,35 +1676,6 @@ export default function App() {
       setClients(list);
     } catch (e) {
       showMessage(e.message, "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAuth = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const fd = new FormData(authFormRef.current);
-      const payload =
-        authView === "login"
-          ? { action: "login", email: fd.get("email"), password: fd.get("password") }
-          : { action: "register", nombre: fd.get("nombre"), email: fd.get("email"), password: fd.get("password") };
-
-      const res = await request(payload);
-
-      if (authView === "login") {
-        setUser(res.user);
-        setMode("dashboard");
-        setMenu("cartera");
-        showMessage(`Bienvenido ${res.user.nombre}`, "success");
-        await loadClients(res.user.id);
-      } else {
-        showMessage("Cuenta creada. Iniciá sesión.", "success");
-        setAuthView("login");
-      }
-    } catch (e2) {
-      showMessage(e2.message, "error");
     } finally {
       setLoading(false);
     }
@@ -2251,26 +2252,6 @@ export default function App() {
     }
   };
 
-  const generateSocialScript = async () => {
-    const idea = String(rsIdea || "").trim();
-    if (!idea) return showMessage("Escribí una idea base para el guión.", "error");
-    setRsLoading(true);
-    try {
-      const res = await request({
-        action: "generateSocialScript",
-        aseguradora_id: user.id,
-        idea,
-        avatar: rsAvatar,
-      });
-      setRsScript(String(res.script || "").trim());
-      showMessage("Guión generado.", "success");
-    } catch (e) {
-      showMessage(e.message, "error");
-    } finally {
-      setRsLoading(false);
-    }
-  };
-
   const copyToClipboard = async (text) => {
     try {
       await navigator.clipboard.writeText(String(text || ""));
@@ -2514,9 +2495,13 @@ export default function App() {
           u.voice = preferred;
           u.lang = preferred.lang || u.lang;
         }
-      } catch {}
+      } catch {
+        // ignore
+      }
       window.speechSynthesis.speak(u);
-    } catch {}
+    } catch {
+      // ignore
+    }
   };
 
   const scrollChatToBottom = () => {
@@ -2627,7 +2612,9 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       try {
         stream.getTracks().forEach((t) => t.stop());
-      } catch {}
+      } catch {
+        // ignore
+      }
       localStorage.setItem(MIC_KEY, "1");
       return true;
     } catch {
@@ -2677,7 +2664,9 @@ export default function App() {
         // si ya estaba arrancado o quedó colgado, intentamos reset básico
         try {
           recRef.current.stop();
-        } catch {}
+        } catch {
+          // ignore
+        }
         try {
           recRef.current.start();
         } catch {
@@ -3020,7 +3009,10 @@ export default function App() {
           </div>
 
           <div className="mt-10 flex items-center justify-between">
-            <div className="text-xs text-slate-400">Backend por Google Apps Script (sin keys en el front).</div>
+            <div className="text-xs text-slate-400">
+              Backend: {backendHealth?.build_id ? `build ${backendHealth.build_id}` : "sin info"}
+              {typeof backendHealth?.db_connected === "boolean" ? ` · db=${backendHealth.db_connected ? "ok" : "off"}` : ""}
+            </div>
             <button
               onClick={openSupport}
               className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-black flex items-center gap-2"
@@ -5657,7 +5649,7 @@ function ClientsTableFull({
     const montoNum = (v) => {
       const raw = String(v ?? "").trim();
       if (!raw) return null;
-      const cleaned = raw.replace(/[^0-9,\.\-]/g, "").replace(",", ".");
+      const cleaned = raw.replace(/[^0-9,.-]/g, "").replace(",", ".");
       const ms = Number(cleaned);
       return Number.isFinite(ms) ? ms : null;
     };
