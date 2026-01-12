@@ -455,9 +455,7 @@ const tryCaptionsSubmit = async ({ apiKey, payload }) => {
 
       // si no es 404, devolvemos el resultado (ok o error real)
       return { url, ok: resp.ok, status: resp.status, rawText, data, attempted };
-    } catch (e) {
-      last = { url, error: e };
-      attempted.push({ url, status: 0, ok: false, error: String(e?.message || e) });
+    } catch {
       // seguimos probando otros candidatos
       continue;
     }
@@ -914,7 +912,6 @@ app.get(["/ready", "/api/ready"], async (_req, res) => {
       build_id: APP_BUILD_ID,
     });
   } catch (e) {
-    dbConnected = false;
     return res.status(503).json({
       ok: false,
       status: "not_ready",
@@ -1019,7 +1016,6 @@ const ensureTenantSchemasCached = async (tenantDb, tenantPool) => {
   try {
     await work;
   } catch (e) {
-    // si falla, dejamos que se reintente en la próxima request
     tenantSchemaEnsurePromises.delete(key);
     throw e;
   }
@@ -1476,6 +1472,30 @@ const ensureTenantClientesPaisSchema = async (tenantPool) => {
     await tenantPool.query("CREATE UNIQUE INDEX IF NOT EXISTS ux_clientes_pais_documento ON clientes(pais, documento)");
   } catch (err) {
     console.log("⚠️ No se pudo asegurar schema clientes.pais:", err?.message || err);
+  }
+};
+
+const ensureTenantClientesReportesSchema = async (tenantPool) => {
+  try {
+    // Columnas mínimas usadas por reportes y filtros.
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS fecha_alta TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS nombre VARCHAR(255)");
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS apellido VARCHAR(255)");
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS mail VARCHAR(255)");
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono VARCHAR(20)");
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS documento VARCHAR(20)");
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS polizas TEXT");
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS descripcion_seguro TEXT");
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS cuota_paga VARCHAR(10) DEFAULT 'NO'");
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS monto DECIMAL(10, 2)");
+
+    // Defaults seguros para evitar NULLs en agregaciones.
+    await tenantPool.query("UPDATE clientes SET cuota_paga = 'NO' WHERE cuota_paga IS NULL OR TRIM(cuota_paga) = ''");
+
+    // pais + índice único (requiere documento)
+    await ensureTenantClientesPaisSchema(tenantPool);
+  } catch (err) {
+    console.log("⚠️ No se pudo asegurar schema clientes para reportes:", err?.message || err);
   }
 };
 
@@ -3134,8 +3154,8 @@ app.post("/api/reports/portfolio/clients-revenue", async (req, res) => {
     try {
       r = await tenantPool.query(queryText, [allowedPaises, fromIso, toIso, limit]);
     } catch (err) {
-      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
-        await ensureTenantClientesPaisSchema(tenantPool);
+      if (String(err?.code) === "42703") {
+        await ensureTenantClientesReportesSchema(tenantPool);
         r = await tenantPool.query(queryText, [allowedPaises, fromIso, toIso, limit]);
       } else {
         throw err;
@@ -3294,8 +3314,8 @@ app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
       rowsR = await tenantPool.query(queryText, rowsParams);
       totalsR = await tenantPool.query(totalsText, totalsParams);
     } catch (err) {
-      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
-        await ensureTenantClientesPaisSchema(tenantPool);
+      if (String(err?.code) === "42703") {
+        await ensureTenantClientesReportesSchema(tenantPool);
         rowsR = await tenantPool.query(queryText, rowsParams);
         totalsR = await tenantPool.query(totalsText, totalsParams);
       } else {
