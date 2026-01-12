@@ -4808,6 +4808,8 @@ export default function App() {
                 paisVista={getPaisNorm()}
                 showWhatsApp
                 showMonto
+                scrollY
+                maxHeightClass="max-h-[70vh]"
                 onWhatsAppAuto={sendWhatsAppAuto}
                 onWhatsAppManual={sendWhatsAppManual}
                 onEdit={openEditClient}
@@ -4890,7 +4892,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 mb-5">
+              <div className="bg-[var(--panel)] rounded-3xl border border-[rgba(255,255,255,.10)] shadow-sm p-5 mb-5">
                 <div className="flex flex-col md:flex-row md:items-center gap-3 justify-between">
                   <div className="flex items-center gap-2">
                     <Pill tone="blue">Alias: {pagoAlias}</Pill>
@@ -4903,7 +4905,7 @@ export default function App() {
                         value={pagoAliasDraft}
                         onChange={(e) => setPagoAliasDraft(e.target.value)}
                         placeholder={DEFAULT_PAGO_ALIAS}
-                        className="px-4 py-3 border border-slate-300 rounded-2xl outline-none w-full sm:w-[180px]"
+                        className="px-4 py-3 rounded-2xl outline-none w-full sm:w-[180px] bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] text-[var(--text)] placeholder:text-[var(--muted)] focus-visible:ring-2 focus-visible:ring-[var(--c1)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--panel)]"
                         title="Alias de pago para mensajes de cuota"
                       />
                       <button
@@ -4917,22 +4919,22 @@ export default function App() {
                     </div>
 
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={16} />
                       <input
                         value={pagosSearch}
                         onChange={(e) => setPagosSearch(e.target.value)}
                         placeholder="Buscar por nombre, documento, tel, email..."
-                        className="pl-10 pr-4 py-3 border border-slate-300 rounded-2xl outline-none w-full sm:w-[320px]"
+                        className="pl-10 pr-4 py-3 rounded-2xl outline-none w-full sm:w-[320px] bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] text-[var(--text)] placeholder:text-[var(--muted)] focus-visible:ring-2 focus-visible:ring-[var(--c1)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--panel)]"
                       />
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <div className="px-3 py-3 border border-slate-300 rounded-2xl bg-white flex items-center gap-2">
-                        <Filter size={16} className="text-slate-500" />
+                      <div className="px-3 py-3 border border-[rgba(255,255,255,.12)] rounded-2xl bg-[rgba(255,255,255,.04)] flex items-center gap-2">
+                        <Filter size={16} className="text-[var(--muted)]" />
                         <select
                           value={pagosFilter}
                           onChange={(e) => setPagosFilter(e.target.value)}
-                          className="outline-none text-sm font-black text-slate-800 bg-transparent"
+                          className="outline-none text-sm font-black text-[var(--text)] bg-transparent"
                         >
                           <option value="ALL">Todos</option>
                           <option value="AL_DIA">Cuota al día</option>
@@ -4943,7 +4945,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="mt-3 text-[11px] text-slate-500">
+                <div className="mt-3 text-[11px] text-[var(--muted)]">
                   Nota: el estado “al día / vencida” depende del campo que manda el backend (no se inventa).
                 </div>
               </div>
@@ -4955,6 +4957,8 @@ export default function App() {
                 showMonto
                 showPagoStatus
                 showPagoWhatsApp
+                scrollY
+                maxHeightClass="max-h-[70vh]"
                 pagoAlias={pagoAlias}
                 onPagoWhatsAppAuto={sendWhatsAppPagoAuto}
                 onPagoWhatsAppManual={sendWhatsAppPagoManual}
