@@ -1,23 +1,46 @@
 @import "tailwindcss";
 
 :root{
+	/* ===== Design Tokens (single source of truth) ===== */
 	--bg:#070B14;
-	--panel:#0B1224;
-	--panel2:#0A1020;
+	--surface:#0B1224;
+	--surface2:#0A1020;
+	--border:rgba(255,255,255,.10);
+	--borderStrong:rgba(255,255,255,.14);
 	--text:#EAF2FF;
 	--muted:#A8B7D4;
+	--primary:#3FD1FF;
+	--primaryHover:#58DCFF;
+	--accent2:#A66CFF;
+	--success:#6CFFB9;
+	--danger:#FF6B6B;
+	--radius:18px;
+	--shadow:0 20px 70px rgba(0,0,0,.35);
+	--focusRing:rgba(63,209,255,.35);
+
+	/* ===== Legacy aliases (compat / incremental migration) ===== */
+	--panel:var(--surface);
+	--panel2:var(--surface2);
 	--line:rgba(63,209,255,.18);
-	--c1:#3FD1FF;
-	--c2:#A66CFF;
-	--c3:#6CFFB9;
+	--c1:var(--primary);
+	--c2:var(--accent2);
+	--c3:var(--success);
 }
 
 html, body { height: 100%; }
 
 body{
 	margin:0;
+	color:var(--text);
+	font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+	color-scheme: dark;
 	background:
 		radial-gradient(900px 600px at 20% 10%, rgba(63,209,255,.10), transparent 60%),
 		radial-gradient(900px 600px at 85% 15%, rgba(166,108,255,.12), transparent 55%),
 		var(--bg);
 }
+
+::selection{background:rgba(63,209,255,.22)}
+
+/* Make form controls readable by default (pages may override). */
+input, select, textarea{color:var(--text)}
