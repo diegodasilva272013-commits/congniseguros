@@ -3136,7 +3136,7 @@ app.post("/api/reports/portfolio/clients-revenue", async (req, res) => {
           AND fecha_alta < $3::timestamptz
       )
       SELECT
-        MIN(id)::int AS id,
+        MIN(id::text) AS id,
         MAX(pais) AS pais,
         MAX(nombre) AS nombre,
         MAX(apellido) AS apellido,
@@ -3257,7 +3257,7 @@ app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
       ),
       grouped AS (
         SELECT
-          MIN(id)::int AS id,
+          MIN(id::text) AS id,
           MAX(pais) AS pais,
           MAX(nombre) AS nombre,
           MAX(apellido) AS apellido,
