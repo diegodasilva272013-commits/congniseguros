@@ -4486,6 +4486,8 @@ export default function App() {
                 paisVista={getPaisNorm()}
                 showWhatsApp={false}
                 showMonto
+                scrollY
+                maxHeightClass="max-h-[70vh]"
                 onEdit={openEditClient}
                 onDelete={openDeleteModal}
               />
@@ -5977,6 +5979,10 @@ function ClientsTableFull({
   onPagoWhatsAppAuto,
   onPagoWhatsAppManual,
   pagoAlias = DEFAULT_PAGO_ALIAS,
+
+  // ✅ NUEVO: scroll vertical opcional (para carteras largas)
+  scrollY = false,
+  maxHeightClass = "max-h-[70vh]",
 }) {
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc"); // asc | desc
@@ -6098,85 +6104,93 @@ function ClientsTableFull({
     <button
       type="button"
       onClick={() => toggleSort(k)}
-      className={`w-full text-left hover:text-slate-700 ${className}`}
+      className={`w-full text-left hover:text-[var(--text)] ${className}`}
       title="Ordenar"
     >
       {label}
     </button>
   );
 
+  const tableWrapClass = scrollY
+    ? `overflow-auto ${maxHeightClass || "max-h-[70vh]"}`
+    : "overflow-x-auto";
+
   return (
-    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-      <div className="overflow-x-auto">
+    <div className="bg-[var(--panel)] rounded-3xl border border-[rgba(255,255,255,.10)] shadow-sm overflow-hidden">
+      <div className={tableWrapClass}>
         <table className="min-w-[1350px] w-full text-left">
-          <thead className="bg-slate-50 border-b border-slate-200">
+          <thead
+            className={`bg-[rgba(255,255,255,.04)] border-b border-[rgba(255,255,255,.10)] ${
+              scrollY ? "sticky top-0 z-10" : ""
+            }`}
+          >
             <tr>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Nombre" k="nombre" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Apellido" k="apellido" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="País" k="pais" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Documento" k="dni" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Tel" k="tel" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Email" k="email" />
               </th>
 
               {showMonto ? (
-                <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+                <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                   <ThBtn label="Monto" k="monto" />
                 </th>
               ) : null}
 
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Inicio" k="inicio" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Fin" k="fin" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Días" k="dias" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Grúa" k="grua" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Tel. Grúa" k="tel_grua" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Cobertura" k="cobertura" />
               </th>
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                 <ThBtn label="Póliza" k="poliza" />
               </th>
 
               {showPagoStatus ? (
-                <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">
+                <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">
                   <ThBtn label="Estado cuota" k="estado_cuota" />
                 </th>
               ) : null}
 
               {showWhatsApp ? (
-                <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">WhatsApp</th>
+                <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">WhatsApp</th>
               ) : null}
 
               {showPagoWhatsApp ? (
-                <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase">Pago WhatsApp</th>
+                <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase">Pago WhatsApp</th>
               ) : null}
 
-              <th className="px-5 py-4 text-[11px] font-black text-slate-500 uppercase text-right">Acciones</th>
+              <th className="px-5 py-4 text-[11px] font-black text-[var(--muted)] uppercase text-right">Acciones</th>
             </tr>
           </thead>
 
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-[rgba(255,255,255,.08)]">
             {sortedClients.map((c) => {
               const pagoStatus = showPagoStatus ? getPagoStatus(c) : null;
               const pais = String(c.pais || paisVista || "AR").toUpperCase() === "UY" ? "UY" : "AR";
@@ -6184,24 +6198,31 @@ function ClientsTableFull({
               const docLabel = isUY ? "Cédula" : "DNI";
 
               return (
-                <tr key={c.id} className={`${isUY ? "bg-sky-50" : ""} hover:bg-slate-50 align-top`}>
-                  <td className="px-5 py-4 text-sm font-black text-slate-900">{c.nombre}</td>
-                  <td className="px-5 py-4 text-sm text-slate-900">{c.apellido}</td>
+                <tr
+                  key={c.id}
+                  className={`${isUY ? "bg-[rgba(63,209,255,.06)]" : ""} hover:bg-[rgba(255,255,255,.04)] align-top`}
+                >
+                  <td className="px-5 py-4 text-sm font-black text-[var(--text)]">{c.nombre}</td>
+                  <td className="px-5 py-4 text-sm text-[var(--text)]">{c.apellido}</td>
                   <td className="px-5 py-4">
                     <span
                       className={`text-[11px] font-black px-2 py-1 rounded-lg border ${
-                        isUY ? "bg-sky-100 border-sky-200 text-sky-800" : "bg-slate-50 border-slate-200 text-slate-700"
+                        isUY
+                          ? "bg-[rgba(63,209,255,.12)] border-[rgba(63,209,255,.28)] text-[var(--c1)]"
+                          : "bg-[rgba(255,255,255,.04)] border-[rgba(255,255,255,.12)] text-[var(--muted)]"
                       }`}
                       title={isUY ? "Uruguay" : "Argentina"}
                     >
                       {pais}
                     </span>
                   </td>
-                  <td className="px-5 py-4 text-sm text-slate-700">
+                  <td className="px-5 py-4 text-sm text-[var(--muted)]">
                     <div className="flex items-center gap-2">
                       <span
                         className={`text-[10px] font-black px-2 py-1 rounded-lg border ${
-                          isUY ? "bg-sky-50 border-sky-200 text-sky-700" : "bg-slate-50 border-slate-200 text-slate-600"
+                          isUY
+                            ? "bg-[rgba(63,209,255,.10)] border-[rgba(63,209,255,.24)] text-[var(--c1)]"
+                            : "bg-[rgba(255,255,255,.04)] border-[rgba(255,255,255,.12)] text-[var(--muted)]"
                         }`}
                       >
                         {docLabel}
@@ -6209,59 +6230,59 @@ function ClientsTableFull({
                       <span>{c.documento}</span>
                     </div>
                   </td>
-                  <td className="px-5 py-4 text-sm text-slate-700">{c.telefono}</td>
-                  <td className="px-5 py-4 text-sm text-slate-700">{c.mail}</td>
+                  <td className="px-5 py-4 text-sm text-[var(--muted)]">{c.telefono}</td>
+                  <td className="px-5 py-4 text-sm text-[var(--muted)]">{c.mail}</td>
 
                   {showMonto ? (
-                    <td className="px-5 py-4 text-sm text-slate-700">
+                    <td className="px-5 py-4 text-sm text-[var(--muted)]">
                       {c.monto ? (
-                        <span className="text-[11px] font-black px-2 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700">
+                        <span className="text-[11px] font-black px-2 py-1 rounded-lg bg-[rgba(108,255,185,.14)] border border-[rgba(108,255,185,.32)] text-[var(--c3)]">
                           {c.monto}
                         </span>
                       ) : (
-                        <span className="text-xs text-slate-400">-</span>
+                        <span className="text-xs text-[var(--muted)]">-</span>
                       )}
                     </td>
                   ) : null}
 
-                  <td className="px-5 py-4 text-sm text-slate-700">{formatDateDisplay(c.fecha_inicio_str)}</td>
-                  <td className="px-5 py-4 text-sm text-slate-700">{formatDateDisplay(c.fecha_fin_str)}</td>
-                  <td className="px-5 py-4 text-sm text-slate-700">
+                  <td className="px-5 py-4 text-sm text-[var(--muted)]">{formatDateDisplay(c.fecha_inicio_str)}</td>
+                  <td className="px-5 py-4 text-sm text-[var(--muted)]">{formatDateDisplay(c.fecha_fin_str)}</td>
+                  <td className="px-5 py-4 text-sm text-[var(--muted)]">
                     {typeof c.dias_left === "number" ? (
-                      <span className="text-[11px] font-black px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700">
+                      <span className="text-[11px] font-black px-2 py-1 rounded-lg bg-[rgba(255,198,93,.12)] border border-[rgba(255,198,93,.30)] text-[#ffc65d]">
                         {c.dias_left}
                       </span>
                     ) : (
-                      "-"
+                      <span className="text-xs text-[var(--muted)]">-</span>
                     )}
                   </td>
-                  <td className="px-5 py-4 text-sm text-slate-700">{c.grua_nombre || "-"}</td>
-                  <td className="px-5 py-4 text-sm text-slate-700">{c.grua_telefono || "-"}</td>
-                  <td className="px-5 py-4 text-sm text-slate-700 max-w-[320px]">
+                  <td className="px-5 py-4 text-sm text-[var(--muted)]">{c.grua_nombre || "-"}</td>
+                  <td className="px-5 py-4 text-sm text-[var(--muted)]">{c.grua_telefono || "-"}</td>
+                  <td className="px-5 py-4 text-sm text-[var(--muted)] max-w-[320px]">
                     <div className="whitespace-pre-wrap line-clamp-4">{c.descripcion_seguro || "-"}</div>
                   </td>
                   <td className="px-5 py-4">
                     {c.polizas ? (
-                      <span className="text-[11px] font-black px-2 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700">
+                      <span className="text-[11px] font-black px-2 py-1 rounded-lg bg-[rgba(108,255,185,.14)] border border-[rgba(108,255,185,.32)] text-[var(--c3)]">
                         PDF
                       </span>
                     ) : (
-                      <span className="text-xs text-slate-400">Sin PDF</span>
+                      <span className="text-xs text-[var(--muted)]">Sin PDF</span>
                     )}
                   </td>
 
                   {showPagoStatus ? (
                     <td className="px-5 py-4">
                       {pagoStatus === "AL_DIA" ? (
-                        <span className="text-[11px] font-black px-2 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700">
+                        <span className="text-[11px] font-black px-2 py-1 rounded-lg bg-[rgba(108,255,185,.14)] border border-[rgba(108,255,185,.32)] text-[var(--c3)]">
                           Al día
                         </span>
                       ) : pagoStatus === "VENCIDA" ? (
-                        <span className="text-[11px] font-black px-2 py-1 rounded-lg bg-red-50 border border-red-200 text-red-700">
+                        <span className="text-[11px] font-black px-2 py-1 rounded-lg bg-[rgba(255,107,107,.12)] border border-[rgba(255,107,107,.30)] text-[rgba(255,107,107,1)]">
                           Vencida
                         </span>
                       ) : (
-                        <span className="text-xs text-slate-400">Sin dato</span>
+                        <span className="text-xs text-[var(--muted)]">Sin dato</span>
                       )}
                     </td>
                   ) : null}
@@ -6279,7 +6300,7 @@ function ClientsTableFull({
 
                         <button
                           onClick={() => onWhatsAppManual && onWhatsAppManual(c)}
-                          className="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 text-[11px] font-black flex items-center gap-2"
+                          className="px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] text-[var(--text)] hover:bg-[rgba(255,255,255,.06)] text-[11px] font-black flex items-center gap-2"
                           title="Abrir WhatsApp manual"
                         >
                           <MessageCircle size={14} /> Manual
@@ -6291,8 +6312,8 @@ function ClientsTableFull({
                   {showPagoWhatsApp ? (
                     <td className="px-5 py-4">
                       <div className="space-y-2">
-                        <div className="text-[11px] text-slate-500">
-                          Alias: <span className="font-black text-slate-800">{pagoAlias}</span>
+                        <div className="text-[11px] text-[var(--muted)]">
+                          Alias: <span className="font-black text-[var(--text)]">{pagoAlias}</span>
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <button
@@ -6304,7 +6325,7 @@ function ClientsTableFull({
                           </button>
                           <button
                             onClick={() => onPagoWhatsAppManual && onPagoWhatsAppManual(c)}
-                            className="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 text-[11px] font-black flex items-center gap-2"
+                            className="px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] text-[var(--text)] hover:bg-[rgba(255,255,255,.06)] text-[11px] font-black flex items-center gap-2"
                             title="Abrir WhatsApp manual"
                           >
                             <MessageCircle size={14} /> Manual
@@ -6318,14 +6339,14 @@ function ClientsTableFull({
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={() => onEdit(c)}
-                        className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700"
+                        className="p-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] hover:bg-[rgba(255,255,255,.06)] text-[var(--text)]"
                         title="Editar"
                       >
                         <Edit3 size={16} />
                       </button>
                       <button
                         onClick={() => onDelete(c)}
-                        className="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-700"
+                        className="p-2 rounded-xl bg-[rgba(255,107,107,.12)] border border-[rgba(255,107,107,.30)] hover:bg-[rgba(255,107,107,.16)] text-[rgba(255,107,107,1)]"
                         title="Eliminar"
                       >
                         <Trash2 size={16} />
@@ -6338,7 +6359,7 @@ function ClientsTableFull({
 
             {clients.length === 0 && (
               <tr>
-                <td colSpan={totalCols} className="px-6 py-10 text-center text-slate-400">
+                <td colSpan={totalCols} className="px-6 py-10 text-center text-[var(--muted)]">
                   {loading ? "Cargando..." : "No hay registros para mostrar."}
                 </td>
               </tr>
@@ -6347,7 +6368,7 @@ function ClientsTableFull({
         </table>
       </div>
 
-      <div className="px-5 py-3 border-t border-slate-200 bg-white text-[11px] text-slate-500">
+      <div className="px-5 py-3 border-t border-[rgba(255,255,255,.10)] bg-[rgba(255,255,255,.02)] text-[11px] text-[var(--muted)]">
         Si no ves alguna columna en tu pantalla, scrolleá horizontal.
       </div>
     </div>
