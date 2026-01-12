@@ -6748,7 +6748,7 @@ app.post("/api/admin/db/apply-all", async (req, res) => {
       return res.status(500).json({
         status: "error",
         message: "Falló setup-db",
-        data: { steps },
+        data: { build_id: APP_BUILD_ID, steps },
       });
     }
 
@@ -6772,11 +6772,11 @@ app.post("/api/admin/db/apply-all", async (req, res) => {
       return res.status(500).json({
         status: "error",
         message: "Falló migrate",
-        data: { steps },
+        data: { build_id: APP_BUILD_ID, steps },
       });
     }
 
-    return res.json({ status: "success", data: { steps } });
+    return res.json({ status: "success", data: { build_id: APP_BUILD_ID, steps } });
   } catch (err) {
     return res.status(500).json({ status: "error", message: err.message });
   }
