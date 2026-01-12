@@ -1450,16 +1450,16 @@ const getAllowedPaisesForAseguradoraId = async (aseguradoraId) => {
 
 const ensureTenantClientesPaisSchema = async (tenantPool) => {
   try {
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS pais VARCHAR(2) DEFAULT 'AR'");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS pais VARCHAR(2) DEFAULT 'AR'");
 
     // Default seguro
-    await tenantPool.query("UPDATE clientes SET pais = 'AR' WHERE pais IS NULL OR TRIM(pais) = ''");
+    await tenantPool.query("UPDATE public.clientes SET pais = 'AR' WHERE pais IS NULL OR TRIM(pais) = ''");
 
     // Heurística simple para datos existentes:
     // si el teléfono parece de Uruguay (prefijo 598), marcamos UY.
     // Esto es clave para que el front pueda mostrar 'Cédula' y estilo celeste.
     await tenantPool.query(
-      `UPDATE clientes
+      `UPDATE public.clientes
        SET pais = 'UY'
        WHERE (pais IS NULL OR TRIM(pais) = '' OR pais = 'AR')
          AND (
@@ -1469,7 +1469,7 @@ const ensureTenantClientesPaisSchema = async (tenantPool) => {
     );
 
     await tenantPool.query("DROP INDEX IF EXISTS ux_clientes_documento");
-    await tenantPool.query("CREATE UNIQUE INDEX IF NOT EXISTS ux_clientes_pais_documento ON clientes(pais, documento)");
+    await tenantPool.query("CREATE UNIQUE INDEX IF NOT EXISTS ux_clientes_pais_documento ON public.clientes(pais, documento)");
   } catch (err) {
     console.log("⚠️ No se pudo asegurar schema clientes.pais:", err?.message || err);
   }
@@ -1478,23 +1478,23 @@ const ensureTenantClientesPaisSchema = async (tenantPool) => {
 const ensureTenantClientesReportesSchema = async (tenantPool) => {
   try {
     // Columnas mínimas usadas por reportes y filtros.
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS fecha_alta TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS nombre VARCHAR(255)");
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS apellido VARCHAR(255)");
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS mail VARCHAR(255)");
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono VARCHAR(20)");
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS documento VARCHAR(20)");
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS polizas TEXT");
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS descripcion_seguro TEXT");
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS cuota_paga VARCHAR(10) DEFAULT 'NO'");
-    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS monto DECIMAL(10, 2)");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS fecha_alta TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS nombre VARCHAR(255)");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS apellido VARCHAR(255)");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS mail VARCHAR(255)");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS telefono VARCHAR(20)");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS documento VARCHAR(20)");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS polizas TEXT");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS descripcion_seguro TEXT");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS cuota_paga VARCHAR(10) DEFAULT 'NO'");
+    await tenantPool.query("ALTER TABLE public.clientes ADD COLUMN IF NOT EXISTS monto DECIMAL(10, 2)");
 
     // Defaults seguros para evitar NULLs en agregaciones.
-    await tenantPool.query("UPDATE clientes SET cuota_paga = 'NO' WHERE cuota_paga IS NULL OR TRIM(cuota_paga) = ''");
-    await tenantPool.query("UPDATE clientes SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL");
+    await tenantPool.query("UPDATE public.clientes SET cuota_paga = 'NO' WHERE cuota_paga IS NULL OR TRIM(cuota_paga) = ''");
+    await tenantPool.query("UPDATE public.clientes SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL");
     await tenantPool.query(
-      "UPDATE clientes SET fecha_alta = COALESCE(fecha_alta, updated_at, CURRENT_TIMESTAMP) WHERE fecha_alta IS NULL"
+      "UPDATE public.clientes SET fecha_alta = COALESCE(fecha_alta, updated_at, CURRENT_TIMESTAMP) WHERE fecha_alta IS NULL"
     );
 
     // pais + índice único (requiere documento)
@@ -2643,7 +2643,7 @@ app.post("/api/autogpt/analyze", async (req, res) => {
           SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) = 'NO' THEN 1 ELSE 0 END)::int AS clientes_cuota_no,
           COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total,
           COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
-        FROM clientes
+        FROM public.clientes
         WHERE pais = ANY($1::text[])
         `,
         [allowedPaises]
@@ -2823,7 +2823,7 @@ app.post("/api/reports/financial/monthly", async (req, res) => {
           COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total,
           SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
           COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
-        FROM clientes
+        FROM public.clientes
         WHERE pais = ANY($1::text[])
           AND fecha_alta IS NOT NULL
           AND fecha_alta >= $2::timestamptz
@@ -2834,8 +2834,8 @@ app.post("/api/reports/financial/monthly", async (req, res) => {
         [allowedPaises, fromIso, toIso]
       );
     } catch (err) {
-      if (String(err?.code) === "42703" || /column\s+"pais"\s+does not exist/i.test(String(err?.message || ""))) {
-        await ensureTenantClientesPaisSchema(tenantPool);
+      if (String(err?.code) === "42703") {
+        await ensureTenantClientesReportesSchema(tenantPool);
         r = await tenantPool.query(
           `
           SELECT
@@ -2844,7 +2844,7 @@ app.post("/api/reports/financial/monthly", async (req, res) => {
             COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total,
             SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
             COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
-          FROM clientes
+          FROM public.clientes
           WHERE pais = ANY($1::text[])
             AND fecha_alta IS NOT NULL
             AND fecha_alta >= $2::timestamptz
@@ -2919,7 +2919,7 @@ app.post("/api/reports/portfolio/line-status", async (req, res) => {
           COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
           COUNT(*)::int AS clientes,
           COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total
-        FROM clientes
+        FROM public.clientes
         WHERE pais = ANY($1::text[])
           AND fecha_alta IS NOT NULL
           AND fecha_alta >= $2::timestamptz
@@ -2939,7 +2939,7 @@ app.post("/api/reports/portfolio/line-status", async (req, res) => {
             COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
             COUNT(*)::int AS clientes,
             COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total
-          FROM clientes
+          FROM public.clientes
           WHERE pais = ANY($1::text[])
             AND fecha_alta IS NOT NULL
             AND fecha_alta >= $2::timestamptz
@@ -3008,7 +3008,7 @@ app.post("/api/reports/portfolio/expirations", async (req, res) => {
           COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
           COALESCE(descripcion_seguro,'') AS descripcion_seguro,
           COALESCE(polizas,'') AS polizas
-        FROM clientes
+        FROM public.clientes
         WHERE pais = ANY($1::text[])
           AND ${fechaFinStrExpr} ~ '^\\d{4}-\\d{2}-\\d{2}$'
           AND (${fechaFinStrExpr})::date >= CURRENT_DATE
@@ -3037,7 +3037,7 @@ app.post("/api/reports/portfolio/expirations", async (req, res) => {
             COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
             COALESCE(descripcion_seguro,'') AS descripcion_seguro,
             COALESCE(polizas,'') AS polizas
-          FROM clientes
+          FROM public.clientes
           WHERE pais = ANY($1::text[])
             AND ${fechaFinStrExpr} ~ '^\\d{4}-\\d{2}-\\d{2}$'
             AND (${fechaFinStrExpr})::date >= CURRENT_DATE
@@ -3129,7 +3129,7 @@ app.post("/api/reports/portfolio/clients-revenue", async (req, res) => {
           ${lineaExpr} AS linea,
           COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
           COALESCE(monto, 0)::numeric(14,2) AS monto
-        FROM clientes
+        FROM public.clientes
         WHERE pais = ANY($1::text[])
           AND fecha_alta IS NOT NULL
           AND fecha_alta >= $2::timestamptz
@@ -3247,7 +3247,7 @@ app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
           ${lineaExpr} AS linea,
           COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
           COALESCE(monto, 0)::numeric(14,2) AS monto
-        FROM clientes
+        FROM public.clientes
         WHERE pais = ANY($1::text[])
           AND ($6::bool = false OR UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ'))
           AND (
@@ -3295,8 +3295,9 @@ app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
         SELECT
           COALESCE(NULLIF(TRIM(cuota_paga), ''), '') AS cuota_paga,
           COALESCE(monto, 0)::numeric(14,2) AS monto
-        FROM clientes
+        FROM public.clientes
         WHERE pais = ANY($1::text[])
+          AND ($4::int >= 0)
           AND ($6::bool = false OR UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ'))
           AND (
             $5::bool = true
@@ -3308,6 +3309,7 @@ app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
         (COALESCE(SUM(monto), 0) * 12)::numeric(14,2) AS ingreso_anual_total,
         COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN monto ELSE 0 END), 0)::numeric(14,2) AS ingreso_mensual_cobrado,
         (COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN monto ELSE 0 END), 0) * 12)::numeric(14,2) AS ingreso_anual_cobrado
+      FROM base
     `;
 
     const rowsParams = [allowedPaises, fromIso, toIso, limit, includeAll, paidOnly];
@@ -3371,7 +3373,43 @@ app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
       rows,
     });
   } catch (err) {
-    return res.status(500).json({ status: "error", message: err?.message || String(err) });
+    try {
+      console.log("⚠️ report client-contribution error", {
+        code: err?.code,
+        message: err?.message,
+        detail: err?.detail,
+        hint: err?.hint,
+        where: err?.where,
+        schema: err?.schema,
+        table: err?.table,
+        column: err?.column,
+        constraint: err?.constraint,
+        build_id: APP_BUILD_ID,
+      });
+    } catch {
+      // ignore
+    }
+
+    const isProd = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
+    const debug = !isProd || isTruthy(process.env.REPORTS_DEBUG || "");
+
+    return res.status(500).json({
+      status: "error",
+      message: err?.message || String(err),
+      build_id: APP_BUILD_ID,
+      ...(debug
+        ? {
+            code: err?.code,
+            detail: err?.detail,
+            hint: err?.hint,
+            where: err?.where,
+            schema: err?.schema,
+            table: err?.table,
+            column: err?.column,
+            constraint: err?.constraint,
+          }
+        : {}),
+    });
   }
 });
 
@@ -6728,6 +6766,7 @@ app.post("/api/admin/db/apply-all", async (req, res) => {
     const createTenants = b.create_tenants !== false;
     const baseline = b.baseline === true;
     const dryRun = b.dry_run === true;
+    const repairReportes = b.repair_reportes !== false;
 
     const steps = [];
 
@@ -6776,7 +6815,113 @@ app.post("/api/admin/db/apply-all", async (req, res) => {
       });
     }
 
+    // 3) Repair tenant columnas de reportes (idempotente)
+    if (repairReportes) {
+      const t0 = Date.now();
+      const results = [];
+      try {
+        const { rows: users } = await pool.query("SELECT id, tenant_db FROM usuarios ORDER BY id ASC");
+
+        for (const u of users) {
+          const userId = String(u.id ?? "").trim();
+          if (!userId) continue;
+          let tenantDb = String(u.tenant_db || "").trim() || getTenantDbNameForUserId(userId);
+
+          try {
+            const exists = await adminPool.query("SELECT 1 FROM pg_database WHERE datname = $1", [tenantDb]);
+            if (exists.rows.length === 0) {
+              if (!createTenants) {
+                results.push({ user_id: userId, tenant_db: tenantDb, ok: false, code: "DB_NOT_FOUND" });
+                continue;
+              }
+              await ensureTenantDbExists(tenantDb);
+            }
+
+            const tenantPool = getOrCreateTenantPoolByDbName(tenantDb);
+            await ensureTenantClientesReportesSchema(tenantPool);
+            results.push({ user_id: userId, tenant_db: tenantDb, ok: true });
+          } catch (err) {
+            results.push({
+              user_id: userId,
+              tenant_db: tenantDb,
+              ok: false,
+              code: err?.code,
+              message: err?.message || String(err),
+            });
+          }
+        }
+      } catch (err) {
+        results.push({ ok: false, code: err?.code, message: err?.message || String(err) });
+      }
+
+      const okCount = results.filter((x) => x.ok).length;
+      const failCount = results.length - okCount;
+      steps.push({
+        name: "repair-reportes",
+        ok: failCount === 0,
+        ms: Date.now() - t0,
+        ok_count: okCount,
+        fail_count: failCount,
+        results_preview: results.slice(0, 50),
+      });
+    }
+
     return res.json({ status: "success", data: { build_id: APP_BUILD_ID, steps } });
+  } catch (err) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// ===== ADMIN: DIAGNÓSTICO clientes (search_path / columnas) =====
+// Útil para casos legacy donde existe un objeto `clientes` que no es `public.clientes`.
+app.get("/api/admin/db/diagnose-clientes", async (req, res) => {
+  try {
+    const admin = await requireAdminAccess(req);
+    if (!admin.ok) return res.status(admin.status).json({ status: "error", message: admin.message });
+
+    const isProd = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
+    const allowInProd = isTruthy(process.env.ALLOW_ADMIN_DB_APPLY || "");
+    if (isProd && !allowInProd) {
+      return res.status(403).json({
+        status: "error",
+        message: "Bloqueado en producción. Seteá ALLOW_ADMIN_DB_APPLY=1 si realmente querés habilitarlo.",
+      });
+    }
+
+    const rawId = req.query?.aseguradora_id;
+    const aseguradoraId = String(rawId || "").trim();
+    if (!aseguradoraId) {
+      return res.status(400).json({ status: "error", message: "aseguradora_id requerido" });
+    }
+
+    const tenantPool = await getTenantPoolFromReq({ ...req, query: { ...(req.query || {}), aseguradora_id: aseguradoraId } });
+
+    const searchPathR = await tenantPool.query("SHOW search_path");
+    const regR = await tenantPool.query(
+      "SELECT to_regclass('public.clientes')::text AS public_clientes, to_regclass('clientes')::text AS unqualified_clientes"
+    );
+    const tablesR = await tenantPool.query(
+      "SELECT table_schema, table_name FROM information_schema.tables WHERE table_name = 'clientes' ORDER BY table_schema ASC"
+    );
+    const colsPublicR = await tenantPool.query(
+      "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='clientes' ORDER BY ordinal_position"
+    );
+
+    const cols = Array.isArray(colsPublicR.rows) ? colsPublicR.rows : [];
+    const hasMonto = cols.some((c) => String(c.column_name || "").toLowerCase() === "monto");
+
+    return res.json({
+      status: "success",
+      data: {
+        aseguradora_id: aseguradoraId,
+        build_id: APP_BUILD_ID,
+        search_path: String(searchPathR.rows?.[0]?.search_path || ""),
+        regclass: regR.rows?.[0] || {},
+        clientes_tables: tablesR.rows || [],
+        public_clientes_columns: cols,
+        public_clientes_has_monto: hasMonto,
+      },
+    });
   } catch (err) {
     return res.status(500).json({ status: "error", message: err.message });
   }
