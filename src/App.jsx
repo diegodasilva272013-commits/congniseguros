@@ -10,6 +10,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import DeveloperAdmin from "./components/DeveloperAdmin.jsx";
+import { BrandedButton, BrandedCard, BrandedCardHeader, BrandedTextarea } from "./ui/branded.jsx";
 
 let __xlsxPromise = null;
 const getXlsx = async () => {
@@ -5516,97 +5517,102 @@ export default function App() {
 
           {/* MARKETING IA */}
           {menu === "marketing" && (
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+            <BrandedCard>
+              <BrandedCardHeader>
                 <div>
-                  <div className="text-xl font-black text-slate-900 flex items-center gap-2">
+                  <div className="text-xl font-black text-[var(--text)] flex items-center gap-2">
                     <Sparkles size={18} /> Marketing IA
                   </div>
-                  <div className="text-sm text-slate-500">Copy (OpenAI vía backend) + Imagen (OpenAI vía backend).</div>
+                  <div className="text-sm text-[var(--muted)]">Copy (OpenAI vía backend) + Imagen (OpenAI vía backend).</div>
                 </div>
-                <button
+                <BrandedButton
                   onClick={openSupport}
-                  className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-black flex items-center gap-2"
+                  variant="ghost"
+                  className="rounded-xl"
                 >
                   <MessageCircle size={16} /> Soporte
-                </button>
-              </div>
+                </BrandedButton>
+              </BrandedCardHeader>
 
               <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="border border-slate-200 rounded-3xl p-5">
-                  <div className="font-black text-slate-900 mb-2">Idea base del anuncio</div>
-                  <textarea
+                <div className="bg-[rgba(255,255,255,.04)] border border-[var(--border)] rounded-3xl p-5">
+                  <div className="font-black text-[var(--text)] mb-2">Idea base del anuncio</div>
+                  <BrandedTextarea
                     value={mkPrompt}
                     onChange={(e) => setMkPrompt(e.target.value)}
                     placeholder="Ej: Seguro de auto con asistencia 24/7..."
-                    className="w-full h-40 px-4 py-3 border border-slate-300 rounded-2xl outline-none resize-none"
+                    className="h-40"
                   />
 
                   <div className="mt-4 flex flex-wrap gap-3">
-                    <button
+                    <BrandedButton
                       type="button"
                       onClick={generateCopy}
                       disabled={mkCopyLoading}
-                      className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black hover:bg-blue-700 flex items-center gap-2 disabled:opacity-60"
+                      variant="solid"
+                      className="px-5 py-3 rounded-2xl"
                     >
                       {mkCopyLoading ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
                       Generar copy
-                    </button>
+                    </BrandedButton>
 
-                    <button
+                    <BrandedButton
                       type="button"
                       onClick={generateImage}
                       disabled={mkImgLoading}
-                      className="px-5 py-3 rounded-2xl bg-slate-900 text-white text-xs font-black hover:bg-black flex items-center gap-2 disabled:opacity-60"
+                      variant="primary"
+                      className="px-5 py-3 rounded-2xl"
                     >
                       {mkImgLoading ? <Loader2 className="animate-spin" size={16} /> : <FileText size={16} />}
                       Generar imagen
-                    </button>
+                    </BrandedButton>
                   </div>
                 </div>
 
-                <div className="border border-slate-200 rounded-3xl p-5">
+                <div className="bg-[rgba(255,255,255,.04)] border border-[var(--border)] rounded-3xl p-5">
                   <div className="flex items-center justify-between mb-2">
-                    <div className="font-black text-slate-900">Copy final</div>
-                    <button
+                    <div className="font-black text-[var(--text)]">Copy final</div>
+                    <BrandedButton
                       type="button"
                       onClick={() => copyToClipboard(mkCopy)}
-                      className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-black flex items-center gap-2"
+                      variant="ghost"
+                      className="px-3 py-2 rounded-xl text-[11px]"
                     >
                       <Copy size={14} /> Copiar
-                    </button>
+                    </BrandedButton>
                   </div>
 
-                  <textarea
+                  <BrandedTextarea
                     value={mkCopy}
                     onChange={(e) => setMkCopy(e.target.value)}
                     placeholder="Acá aparece el copy..."
-                    className="w-full h-40 px-4 py-3 border border-slate-300 rounded-2xl outline-none resize-none"
+                    className="h-40"
                   />
 
                   <div className="mt-5">
-                    <div className="font-black text-slate-900 mb-2">Imagen</div>
+                    <div className="font-black text-[var(--text)] mb-2">Imagen</div>
 
                     {mkImage ? (
                       <div className="space-y-3">
-                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                        <div className="bg-[rgba(255,255,255,.04)] border border-[var(--border)] rounded-2xl p-3">
                           <img src={mkImage} alt="Marketing" className="w-full rounded-xl" />
                         </div>
-                        <button
+                        <BrandedButton
                           type="button"
                           onClick={() => copyToClipboard(mkImage)}
-                          className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-black flex items-center gap-2"
+                          variant="ghost"
+                          className="px-4 py-2 rounded-xl text-[11px]"
                         >
                           <Copy size={14} /> Copiar DataURL
-                        </button>
+                        </BrandedButton>
                       </div>
                     ) : (
-                      <div className="text-sm text-slate-500">Generá una imagen para verla acá.</div>
+                      <div className="text-sm text-[var(--muted)]">Generá una imagen para verla acá.</div>
                     )}
                   </div>
                 </div>
               </div>
-            </div>
+            </BrandedCard>
           )}
 
         </main>
