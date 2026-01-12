@@ -485,14 +485,14 @@ function MenuBtn({ icon, label, onClick, active, badge }) {
 function FieldInput({ label, name, defaultValue, required = false, type = "text", step }) {
   return (
     <div className="space-y-1.5">
-      <label className="text-[11px] font-black text-slate-600">{label}</label>
+      <label className="text-[11px] font-black text-[var(--muted)]">{label}</label>
       <input
         name={name}
         type={type}
         step={step}
         defaultValue={defaultValue}
         required={required}
-        className="w-full px-4 py-2.5 border rounded-2xl outline-none"
+        className="w-full px-4 py-2.5 rounded-2xl outline-none bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] text-[var(--text)] placeholder:text-[var(--muted)] focus-visible:ring-2 focus-visible:ring-[var(--focusRing)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
       />
     </div>
   );
@@ -500,9 +500,9 @@ function FieldInput({ label, name, defaultValue, required = false, type = "text"
 
 function DataLine({ label, value }) {
   return (
-    <div className="flex items-start justify-between gap-4 py-2 border-b border-slate-100 last:border-b-0">
-      <div className="text-[11px] uppercase font-black text-slate-500">{label}</div>
-      <div className="text-sm font-black text-slate-800 text-right break-all">{value || "-"}</div>
+    <div className="flex items-start justify-between gap-4 py-2 border-b border-[rgba(255,255,255,.06)] last:border-b-0">
+      <div className="text-[11px] uppercase font-black text-[var(--muted)]">{label}</div>
+      <div className="text-sm font-black text-[var(--text)] text-right break-all">{value || "-"}</div>
     </div>
   );
 }
@@ -5620,14 +5620,14 @@ export default function App() {
         {/* MODAL ABM CLIENTE */}
         {showClientModal && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-            <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border border-slate-200 flex flex-col max-h-[92vh]">
-              <div className="sticky top-0 z-10 bg-slate-50/95 backdrop-blur px-5 sm:px-6 py-4 border-b border-slate-200 flex items-center justify-between rounded-t-3xl">
-                <h3 className="text-lg sm:text-xl font-black text-slate-800">
+            <div className="bg-[var(--surface)] w-full max-w-3xl rounded-3xl shadow-2xl border border-[var(--border)] text-[var(--text)] flex flex-col max-h-[92vh]">
+              <div className="sticky top-0 z-10 bg-[rgba(11,18,36,.92)] backdrop-blur px-5 sm:px-6 py-4 border-b border-[var(--line)] flex items-center justify-between rounded-t-3xl">
+                <h3 className="text-lg sm:text-xl font-black text-[var(--text)]">
                   {editingClient ? "Editar cliente" : "Nuevo cliente"}
                 </h3>
                 <button
                   onClick={() => setShowClientModal(false)}
-                  className="p-2 rounded-xl hover:bg-slate-200"
+                  className="p-2 rounded-xl hover:bg-[rgba(255,255,255,.06)]"
                   title="Cerrar"
                 >
                   <X size={18} />
@@ -5659,7 +5659,7 @@ export default function App() {
                   <div className="space-y-1.5">
                     <label
                       className={`text-[11px] font-black ${
-                        isUY ? "text-sky-700" : "text-slate-600"
+                        isUY ? "text-[var(--primary)]" : "text-[var(--muted)]"
                       }`}
                     >
                       {docLabel} *
@@ -5668,30 +5668,30 @@ export default function App() {
                       name="documento"
                       required
                       defaultValue={editingClient?.documento || ""}
-                      className={`w-full px-4 py-2.5 border rounded-2xl outline-none ${
-                        isUY ? "border-sky-200 bg-sky-50" : ""
+                      className={`w-full px-4 py-2.5 rounded-2xl outline-none bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] text-[var(--text)] placeholder:text-[var(--muted)] focus-visible:ring-2 focus-visible:ring-[var(--focusRing)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)] ${
+                        isUY ? "border-[rgba(63,209,255,.35)] bg-[rgba(63,209,255,.08)]" : ""
                       }`}
                     />
                   </div>
                   <FieldInput label="Teléfono *" name="telefono" required defaultValue={editingClient?.telefono || ""} />
 
                   <div className="sm:col-span-2 space-y-1.5">
-                    <label className="text-[11px] font-black text-slate-600">Email * (acceso Portal Cliente)</label>
+                    <label className="text-[11px] font-black text-[var(--muted)]">Email * (acceso Portal Cliente)</label>
                     <input
                       name="mail"
                       type="email"
                       required
                       defaultValue={editingClient?.mail || ""}
-                      className="w-full px-4 py-2.5 border rounded-2xl outline-none"
+                      className="w-full px-4 py-2.5 rounded-2xl outline-none bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] text-[var(--text)] placeholder:text-[var(--muted)] focus-visible:ring-2 focus-visible:ring-[var(--focusRing)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
                     />
-                    <div className="text-[11px] text-slate-500">
+                    <div className="text-[11px] text-[var(--muted)]">
                       Importante: este email se usa para enviar el código de ingreso del cliente.
                     </div>
                   </div>
 
                   {/* ✅ NUEVO: MONTO */}
-                  <div className="sm:col-span-2 bg-emerald-50 border border-emerald-100 rounded-3xl p-4">
-                    <div className="font-black text-emerald-800 text-[11px] uppercase flex items-center gap-2 mb-3">
+                  <div className="sm:col-span-2 bg-[rgba(108,255,185,.08)] border border-[rgba(108,255,185,.18)] rounded-3xl p-4">
+                    <div className="font-black text-[var(--success)] text-[11px] uppercase flex items-center gap-2 mb-3">
                       <DollarSign size={16} /> Pago / Cuota
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -5702,46 +5702,46 @@ export default function App() {
                         defaultValue={editingClient?.monto || ""}
                       />
                       <div className="space-y-1.5">
-                        <label className="text-[11px] font-black text-emerald-700">Alias</label>
+                        <label className="text-[11px] font-black text-[var(--muted)]">Alias</label>
                         <input
                           value={pagoAlias}
                           readOnly
-                          className="w-full px-4 py-2.5 border rounded-2xl bg-white outline-none"
+                          className="w-full px-4 py-2.5 rounded-2xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] outline-none text-[var(--text)]"
                         />
-                        <div className="text-[11px] text-slate-500">Fijo para mensajes de pago.</div>
+                        <div className="text-[11px] text-[var(--muted)]">Fijo para mensajes de pago.</div>
                       </div>
                     </div>
                   </div>
 
-                  <div className="sm:col-span-2 bg-blue-50 border border-blue-100 rounded-3xl p-4">
-                    <div className="font-black text-blue-800 text-[11px] uppercase flex items-center gap-2 mb-3">
+                  <div className="sm:col-span-2 bg-[rgba(63,209,255,.08)] border border-[rgba(63,209,255,.18)] rounded-3xl p-4">
+                    <div className="font-black text-[var(--primary)] text-[11px] uppercase flex items-center gap-2 mb-3">
                       <Clock size={16} /> Vigencia del seguro
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="space-y-1.5">
-                        <label className="text-[11px] font-black text-blue-700">Fecha inicio</label>
+                        <label className="text-[11px] font-black text-[var(--muted)]">Fecha inicio</label>
                         <input
                           type="date"
                           name="fecha_inicio"
                           defaultValue={formatDateForInput(editingClient?.fecha_inicio_str)}
-                          className="w-full px-4 py-2.5 border rounded-2xl bg-white outline-none"
+                          className="w-full px-4 py-2.5 rounded-2xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] outline-none text-[var(--text)] focus-visible:ring-2 focus-visible:ring-[var(--focusRing)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
                         />
                       </div>
 
                       <div className="space-y-1.5">
-                        <label className="text-[11px] font-black text-blue-700">Fecha fin</label>
+                        <label className="text-[11px] font-black text-[var(--muted)]">Fecha fin</label>
                         <input
                           type="date"
                           name="fecha_fin"
                           defaultValue={formatDateForInput(editingClient?.fecha_fin_str)}
-                          className="w-full px-4 py-2.5 border rounded-2xl bg-white outline-none"
+                          className="w-full px-4 py-2.5 rounded-2xl bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] outline-none text-[var(--text)] focus-visible:ring-2 focus-visible:ring-[var(--focusRing)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
                         />
                       </div>
                     </div>
                   </div>
 
-                  <div className="sm:col-span-2 bg-slate-50 border border-slate-200 rounded-3xl p-4">
-                    <div className="font-black text-slate-800 text-[11px] uppercase flex items-center gap-2 mb-3">
+                  <div className="sm:col-span-2 bg-[rgba(255,255,255,.04)] border border-[var(--border)] rounded-3xl p-4">
+                    <div className="font-black text-[var(--text)] text-[11px] uppercase flex items-center gap-2 mb-3">
                       Servicio de grúa
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -5759,20 +5759,20 @@ export default function App() {
                   </div>
 
                   <div className="sm:col-span-2 space-y-1.5">
-                    <label className="text-[11px] font-black text-slate-600">Detalle de cobertura</label>
+                    <label className="text-[11px] font-black text-[var(--muted)]">Detalle de cobertura</label>
                     <textarea
                       name="descripcion_seguro"
                       defaultValue={editingClient?.descripcion_seguro || ""}
-                      className="w-full px-4 py-2.5 border rounded-2xl outline-none h-24 resize-none"
+                      className="w-full px-4 py-2.5 rounded-2xl outline-none h-24 resize-none bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] text-[var(--text)] placeholder:text-[var(--muted)] focus-visible:ring-2 focus-visible:ring-[var(--focusRing)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
                     />
                   </div>
 
-                  <div className="sm:col-span-2 bg-emerald-50 border border-emerald-100 rounded-3xl p-4">
-                    <div className="font-black text-emerald-800 text-[11px] uppercase mb-3">Póliza (PDF)</div>
+                  <div className="sm:col-span-2 bg-[rgba(108,255,185,.08)] border border-[rgba(108,255,185,.18)] rounded-3xl p-4">
+                    <div className="font-black text-[var(--success)] text-[11px] uppercase mb-3">Póliza (PDF)</div>
 
                     {editingClient?.polizas ? (
                       <div className="flex flex-wrap gap-2 items-center mb-3">
-                        <span className="text-[11px] font-black px-3 py-2 rounded-xl bg-white border border-emerald-200 text-emerald-700">
+                        <span className="text-[11px] font-black px-3 py-2 rounded-xl bg-[rgba(255,255,255,.04)] border border-[rgba(108,255,185,.22)] text-[var(--success)]">
                           PDF cargado
                         </span>
 
@@ -5801,7 +5801,7 @@ export default function App() {
                         </button>
                       </div>
                     ) : (
-                      <div className="text-xs text-slate-500 mb-3">No hay PDF cargado. Podés subirlo abajo.</div>
+                      <div className="text-xs text-[var(--muted)] mb-3">No hay PDF cargado. Podés subirlo abajo.</div>
                     )}
 
                     <input
@@ -5811,7 +5811,7 @@ export default function App() {
                       className="w-full text-sm"
                     />
 
-                    <p className="text-[11px] text-slate-500 mt-2">
+                    <p className="text-[11px] text-[var(--muted)] mt-2">
                       Si estás editando y no subís un PDF nuevo, se mantiene el anterior.
                     </p>
                   </div>
@@ -5820,12 +5820,12 @@ export default function App() {
                 })()}
               </div>
 
-              <div className="sticky bottom-0 z-10 bg-white/95 backdrop-blur px-5 sm:px-6 py-4 border-t border-slate-200 rounded-b-3xl">
+              <div className="sticky bottom-0 z-10 bg-[rgba(11,18,36,.92)] backdrop-blur px-5 sm:px-6 py-4 border-t border-[var(--line)] rounded-b-3xl">
                 <div className="flex justify-end gap-3">
                   <button
                     type="button"
                     onClick={closeClientModal}
-                    className="px-5 py-3 rounded-2xl bg-white border border-slate-200 text-slate-600 text-xs font-black hover:bg-slate-50"
+                    className="px-5 py-3 rounded-2xl bg-[rgba(255,255,255,.04)] border border-[var(--border)] text-[var(--text)] text-xs font-black hover:bg-[rgba(255,255,255,.07)]"
                   >
                     Cancelar
                   </button>
@@ -5834,7 +5834,7 @@ export default function App() {
                     form="clientForm"
                     type="submit"
                     disabled={loading}
-                    className="px-6 py-3 rounded-2xl bg-slate-900 text-white text-xs font-black hover:bg-black flex items-center gap-2 disabled:opacity-60"
+                    className="px-6 py-3 rounded-2xl bg-[var(--primary)] text-[#071018] text-xs font-black hover:bg-[var(--primaryHover)] flex items-center gap-2 disabled:opacity-60"
                   >
                     {loading ? <Loader2 className="animate-spin" size={16} /> : null}
                     Guardar
@@ -5848,21 +5848,21 @@ export default function App() {
         {/* MODAL ELIMINAR */}
         {deleteModalOpen && clientToDelete && (
           <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[70] flex items-center justify-center p-3 sm:p-4">
-            <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden max-h-[92vh]">
-              <div className="bg-red-50 border-b border-red-100 px-5 sm:px-6 py-4 flex items-center justify-between">
+            <div className="bg-[var(--surface)] w-full max-w-3xl rounded-3xl shadow-2xl border border-[var(--border)] text-[var(--text)] flex flex-col overflow-hidden max-h-[92vh]">
+              <div className="bg-[rgba(255,107,107,.10)] border-b border-[rgba(255,107,107,.22)] px-5 sm:px-6 py-4 flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-black text-red-800">Confirmar eliminación</div>
-                  <div className="text-[11px] text-red-700">Vas a borrar este cliente (detalle completo).</div>
+                  <div className="text-sm font-black text-[var(--text)]">Confirmar eliminación</div>
+                  <div className="text-[11px] text-[rgba(255,107,107,.85)]">Vas a borrar este cliente (detalle completo).</div>
                 </div>
-                <button onClick={closeDeleteModal} className="p-2 rounded-xl hover:bg-red-100" title="Cerrar">
-                  <X size={18} className="text-red-700" />
+                <button onClick={closeDeleteModal} className="p-2 rounded-xl hover:bg-[rgba(255,107,107,.14)]" title="Cerrar">
+                  <X size={18} className="text-[rgba(255,107,107,.85)]" />
                 </button>
               </div>
 
               <div className="px-5 sm:px-6 py-5 overflow-y-auto">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="bg-slate-50 border border-slate-200 rounded-3xl p-4">
-                    <div className="text-[11px] font-black text-slate-500 uppercase mb-2">Identidad</div>
+                  <div className="bg-[rgba(255,255,255,.04)] border border-[var(--border)] rounded-3xl p-4">
+                    <div className="text-[11px] font-black text-[var(--muted)] uppercase mb-2">Identidad</div>
                     <DataLine label="Nombre" value={clientToDelete.nombre} />
                     <DataLine label="Apellido" value={clientToDelete.apellido} />
                     <DataLine
@@ -5874,8 +5874,8 @@ export default function App() {
                     <DataLine label="Monto" value={clientToDelete.monto || "-"} />
                   </div>
 
-                  <div className="bg-slate-50 border border-slate-200 rounded-3xl p-4">
-                    <div className="text-[11px] font-black text-slate-500 uppercase mb-2">Seguro</div>
+                  <div className="bg-[rgba(255,255,255,.04)] border border-[var(--border)] rounded-3xl p-4">
+                    <div className="text-[11px] font-black text-[var(--muted)] uppercase mb-2">Seguro</div>
                     <DataLine label="Inicio" value={formatDateDisplay(clientToDelete.fecha_inicio_str)} />
                     <DataLine label="Fin" value={formatDateDisplay(clientToDelete.fecha_fin_str)} />
                     <DataLine
@@ -5885,8 +5885,8 @@ export default function App() {
                     <DataLine label="Cobertura" value={clientToDelete.descripcion_seguro || "-"} />
                   </div>
 
-                  <div className="sm:col-span-2 bg-slate-50 border border-slate-200 rounded-3xl p-4">
-                    <div className="text-[11px] font-black text-slate-500 uppercase mb-2">Grúa</div>
+                  <div className="sm:col-span-2 bg-[rgba(255,255,255,.04)] border border-[var(--border)] rounded-3xl p-4">
+                    <div className="text-[11px] font-black text-[var(--muted)] uppercase mb-2">Grúa</div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <DataLine label="Empresa" value={clientToDelete.grua_nombre || "-"} />
@@ -5918,20 +5918,20 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => openPdfNewTab(clientToDelete.polizas)}
-                            className="px-4 py-2 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-[11px] font-black flex items-center gap-2"
+                            className="px-4 py-2 rounded-xl bg-[rgba(108,255,185,.10)] text-[var(--success)] hover:bg-[rgba(108,255,185,.16)] border border-[rgba(108,255,185,.18)] text-[11px] font-black flex items-center gap-2"
                           >
                             <Eye size={14} /> Ver póliza
                           </button>
                           <button
                             type="button"
                             onClick={() => triggerDownloadPdf(clientToDelete.polizas, clientToDelete.documento || "cliente")}
-                            className="px-4 py-2 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 text-[11px] font-black flex items-center gap-2"
+                            className="px-4 py-2 rounded-xl bg-[rgba(63,209,255,.10)] text-[var(--primary)] hover:bg-[rgba(63,209,255,.16)] border border-[rgba(63,209,255,.18)] text-[11px] font-black flex items-center gap-2"
                           >
                             <Download size={14} /> Descargar póliza
                           </button>
                         </>
                       ) : (
-                        <span className="text-xs text-slate-400 self-center">Sin PDF</span>
+                        <span className="text-xs text-[var(--muted)] self-center">Sin PDF</span>
                       )}
                     </div>
                   </div>
