@@ -1479,6 +1479,7 @@ const ensureTenantClientesReportesSchema = async (tenantPool) => {
   try {
     // Columnas mínimas usadas por reportes y filtros.
     await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS fecha_alta TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+    await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
     await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS nombre VARCHAR(255)");
     await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS apellido VARCHAR(255)");
     await tenantPool.query("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS mail VARCHAR(255)");
@@ -1491,6 +1492,10 @@ const ensureTenantClientesReportesSchema = async (tenantPool) => {
 
     // Defaults seguros para evitar NULLs en agregaciones.
     await tenantPool.query("UPDATE clientes SET cuota_paga = 'NO' WHERE cuota_paga IS NULL OR TRIM(cuota_paga) = ''");
+    await tenantPool.query("UPDATE clientes SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL");
+    await tenantPool.query(
+      "UPDATE clientes SET fecha_alta = COALESCE(fecha_alta, updated_at, CURRENT_TIMESTAMP) WHERE fecha_alta IS NULL"
+    );
 
     // pais + índice único (requiere documento)
     await ensureTenantClientesPaisSchema(tenantPool);
@@ -2634,10 +2639,10 @@ app.post("/api/autogpt/analyze", async (req, res) => {
         `
         SELECT
           COUNT(*)::int AS clientes_total,
-          SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
-          SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'NO' THEN 1 ELSE 0 END)::int AS clientes_cuota_no,
+          SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
+          SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) = 'NO' THEN 1 ELSE 0 END)::int AS clientes_cuota_no,
           COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total,
-          COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
+          COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
         FROM clientes
         WHERE pais = ANY($1::text[])
         `,
@@ -2816,8 +2821,8 @@ app.post("/api/reports/financial/monthly", async (req, res) => {
           to_char(date_trunc('month', fecha_alta), 'YYYY-MM') AS month,
           COUNT(*)::int AS clientes,
           COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total,
-          SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
-          COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
+          SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
+          COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
         FROM clientes
         WHERE pais = ANY($1::text[])
           AND fecha_alta IS NOT NULL
@@ -2837,8 +2842,8 @@ app.post("/api/reports/financial/monthly", async (req, res) => {
             to_char(date_trunc('month', fecha_alta), 'YYYY-MM') AS month,
             COUNT(*)::int AS clientes,
             COALESCE(SUM(COALESCE(monto, 0)), 0)::numeric(14,2) AS monto_total,
-            SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
-            COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
+            SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN 1 ELSE 0 END)::int AS clientes_cuota_si,
+            COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN COALESCE(monto, 0) ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
           FROM clientes
           WHERE pais = ANY($1::text[])
             AND fecha_alta IS NOT NULL
@@ -3141,7 +3146,7 @@ app.post("/api/reports/portfolio/clients-revenue", async (req, res) => {
         MAX(linea) AS linea,
         COUNT(*)::int AS items,
         COALESCE(SUM(monto), 0)::numeric(14,2) AS monto_total,
-        COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN monto ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
+        COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN monto ELSE 0 END), 0)::numeric(14,2) AS monto_cobrado
       FROM (
         SELECT *, COALESCE(NULLIF(TRIM(documento), ''), id::text) AS doc_key
         FROM base
@@ -3244,7 +3249,7 @@ app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
           COALESCE(monto, 0)::numeric(14,2) AS monto
         FROM clientes
         WHERE pais = ANY($1::text[])
-          AND ($6::bool = false OR UPPER(COALESCE(cuota_paga,'')) = 'SI')
+          AND ($6::bool = false OR UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ'))
           AND (
             $5::bool = true
             OR (fecha_alta IS NOT NULL AND fecha_alta >= $2::timestamptz AND fecha_alta < $3::timestamptz)
@@ -3263,7 +3268,7 @@ app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
           MAX(cuota_paga) AS cuota_paga,
           COUNT(*)::int AS items,
           COALESCE(SUM(monto), 0)::numeric(14,2) AS ingreso_mensual,
-          COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN monto ELSE 0 END), 0)::numeric(14,2) AS ingreso_mensual_cobrado
+          COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN monto ELSE 0 END), 0)::numeric(14,2) AS ingreso_mensual_cobrado
         FROM (
           SELECT *, COALESCE(NULLIF(TRIM(documento), ''), id::text) AS doc_key
           FROM base
@@ -3292,7 +3297,7 @@ app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
           COALESCE(monto, 0)::numeric(14,2) AS monto
         FROM clientes
         WHERE pais = ANY($1::text[])
-          AND ($6::bool = false OR UPPER(COALESCE(cuota_paga,'')) = 'SI')
+          AND ($6::bool = false OR UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ'))
           AND (
             $5::bool = true
             OR (fecha_alta IS NOT NULL AND fecha_alta >= $2::timestamptz AND fecha_alta < $3::timestamptz)
@@ -3301,8 +3306,8 @@ app.post("/api/reports/portfolio/client-contribution", async (req, res) => {
       SELECT
         COALESCE(SUM(monto), 0)::numeric(14,2) AS ingreso_mensual_total,
         (COALESCE(SUM(monto), 0) * 12)::numeric(14,2) AS ingreso_anual_total,
-        COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN monto ELSE 0 END), 0)::numeric(14,2) AS ingreso_mensual_cobrado,
-        (COALESCE(SUM(CASE WHEN UPPER(COALESCE(cuota_paga,'')) = 'SI' THEN monto ELSE 0 END), 0) * 12)::numeric(14,2) AS ingreso_anual_cobrado
+        COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN monto ELSE 0 END), 0)::numeric(14,2) AS ingreso_mensual_cobrado,
+        (COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(cuota_paga,''))) IN ('SI','SÍ') THEN monto ELSE 0 END), 0) * 12)::numeric(14,2) AS ingreso_anual_cobrado
     `;
 
     const rowsParams = [allowedPaises, fromIso, toIso, limit, includeAll, paidOnly];
