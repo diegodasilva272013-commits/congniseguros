@@ -3604,16 +3604,16 @@ export default function App() {
           ) : (
             <div className="space-y-6">
               {/* Header */}
-              <div className="bg-white rounded-3xl shadow-2xl border border-slate-800 p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="bg-[var(--surface)] rounded-3xl shadow-2xl border border-[var(--border)] p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
-                  <div className="text-2xl font-black text-slate-900">
+                  <div className="text-2xl font-black text-[var(--text)]">
                     {clienteData.nombre} {clienteData.apellido}
                   </div>
-                  <div className="text-sm text-slate-500">
+                  <div className="text-sm text-[var(--muted)]">
                     <span
                       className={
                         String(clienteData.pais || "").toUpperCase() === "UY"
-                          ? "text-sky-700 font-black"
+                          ? "text-[var(--primary)] font-black"
                           : "font-black"
                       }
                     >
@@ -3632,7 +3632,7 @@ export default function App() {
                 <div className="flex gap-2 flex-wrap justify-end">
                   <button
                     onClick={() => triggerDownloadPdf(clienteData.polizas, clienteData.documento || "cliente")}
-                    className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-black hover:bg-blue-700 flex items-center gap-2"
+                    className="px-4 py-2 rounded-xl bg-[var(--primary)] text-[#071018] text-xs font-black hover:bg-[var(--primaryHover)] flex items-center gap-2 disabled:opacity-60"
                     disabled={!clienteData.polizas}
                   >
                     <Download size={16} /> Descargar póliza
@@ -3640,7 +3640,7 @@ export default function App() {
 
                   <button
                     onClick={() => openPdfNewTab(clienteData.polizas)}
-                    className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 flex items-center gap-2"
+                    className="px-4 py-2 rounded-xl bg-[rgba(255,255,255,.06)] hover:bg-[rgba(255,255,255,.10)] text-[var(--text)] text-xs font-black flex items-center gap-2 border border-[rgba(255,255,255,.12)] disabled:opacity-60"
                     disabled={!clienteData.polizas}
                   >
                     <Eye size={16} /> Ver póliza
@@ -3648,7 +3648,7 @@ export default function App() {
 
                   <button
                     onClick={clienteLogout}
-                    className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-black flex items-center gap-2"
+                    className="px-4 py-2 rounded-xl bg-[rgba(255,255,255,.06)] hover:bg-[rgba(255,255,255,.10)] text-[var(--text)] text-xs font-black flex items-center gap-2 border border-[rgba(255,255,255,.12)]"
                   >
                     <LogOut size={16} /> Salir
                   </button>
@@ -3657,11 +3657,11 @@ export default function App() {
 
               {/* Data cards */}
               <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
-                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
-                  <div className="font-black text-slate-900 flex items-center gap-2">
+                <div className="bg-[var(--surface)] rounded-3xl border border-[var(--border)] shadow-sm p-5">
+                  <div className="font-black text-[var(--text)] flex items-center gap-2">
                     <Clock size={18} /> Vigencia
                   </div>
-                  <div className="mt-3 text-sm text-slate-700">
+                  <div className="mt-3 text-sm text-[var(--muted)]">
                     <div>
                       Inicio: <span className="font-black">{formatDateDisplay(clienteData.fecha_inicio_str)}</span>
                     </div>
@@ -3680,11 +3680,11 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
-                  <div className="font-black text-slate-900 flex items-center gap-2">
+                <div className="bg-[var(--surface)] rounded-3xl border border-[var(--border)] shadow-sm p-5">
+                  <div className="font-black text-[var(--text)] flex items-center gap-2">
                     <Phone size={18} /> Grúa
                   </div>
-                  <div className="mt-3 text-sm text-slate-700">
+                  <div className="mt-3 text-sm text-[var(--muted)]">
                     <div>
                       Empresa: <span className="font-black">{clienteData.grua_nombre || "-"}</span>
                     </div>
@@ -3700,7 +3700,7 @@ export default function App() {
                             `Hola, necesito asistencia de grúa. Soy ${clienteData.nombre} ${clienteData.apellido}.`
                           )
                         }
-                        className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 flex items-center gap-2"
+                        className="px-4 py-2 rounded-xl bg-[var(--primary)] text-[#071018] text-xs font-black hover:bg-[var(--primaryHover)] flex items-center gap-2 disabled:opacity-60"
                         disabled={!clienteData.grua_telefono}
                       >
                         <MessageCircle size={16} /> WhatsApp grúa
@@ -3709,7 +3709,7 @@ export default function App() {
                       {/* ✅ NUEVO: COPIAR NÚMERO (se pidió) */}
                       <button
                         onClick={() => copyToClipboard(clienteData.grua_telefono)}
-                        className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 text-xs font-black flex items-center gap-2"
+                        className="px-4 py-2 rounded-xl bg-[rgba(255,255,255,.06)] hover:bg-[rgba(255,255,255,.10)] text-[var(--text)] text-xs font-black flex items-center gap-2 border border-[rgba(255,255,255,.12)] disabled:opacity-60"
                         disabled={!clienteData.grua_telefono}
                       >
                         <Copy size={16} /> Copiar número
@@ -3718,7 +3718,7 @@ export default function App() {
                       {/* ✅ NUEVO: LLAMAR GRÚA (abre discador telefónico) */}
                       <a
                         href={`tel:${clienteData.grua_telefono || '59892064193'}`}
-                        className="px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 text-xs font-black flex items-center gap-2"
+                        className="px-4 py-2 rounded-xl bg-[rgba(255,255,255,.06)] hover:bg-[rgba(255,255,255,.10)] text-[var(--text)] text-xs font-black flex items-center gap-2 border border-[rgba(255,255,255,.12)]"
                         style={{ textDecoration: "none" }}
                       >
                         <Phone size={16} /> Llamar grúa
@@ -3729,22 +3729,22 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
-                  <div className="font-black text-slate-900 flex items-center gap-2">
+                <div className="bg-[var(--surface)] rounded-3xl border border-[var(--border)] shadow-sm p-5">
+                  <div className="font-black text-[var(--text)] flex items-center gap-2">
                     <FileText size={18} /> Cobertura
                   </div>
-                  <div className="mt-3 text-sm text-slate-700 whitespace-pre-wrap">
+                  <div className="mt-3 text-sm text-[var(--muted)] whitespace-pre-wrap">
                     {clienteData.descripcion_seguro || "Sin detalle cargado."}
                   </div>
                 </div>
 
                 {/* Ficha técnica aseguradora (portal cliente) */}
-                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
-                  <div className="font-black text-slate-900 flex items-center gap-2">
+                <div className="bg-[var(--surface)] rounded-3xl border border-[var(--border)] shadow-sm p-5">
+                  <div className="font-black text-[var(--text)] flex items-center gap-2">
                     <Building2 size={18} /> Aseguradora
                   </div>
 
-                  <div className="mt-3 text-sm text-slate-700">
+                  <div className="mt-3 text-sm text-[var(--muted)]">
                     {asegPerfil ? (
                       <>
                         {asegPerfil.logo_dataurl ? (
@@ -3779,7 +3779,7 @@ export default function App() {
                             onClick={() =>
                               openWhatsAppManual(asegPerfil.telefono, "Hola, necesito ayuda con mi póliza.")
                             }
-                            className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 flex items-center gap-2"
+                            className="px-4 py-2 rounded-xl bg-[var(--primary)] text-[#071018] text-xs font-black hover:bg-[var(--primaryHover)] flex items-center gap-2 disabled:opacity-60"
                             disabled={!asegPerfil.telefono}
                           >
                             <MessageCircle size={16} /> WhatsApp
@@ -3787,26 +3787,26 @@ export default function App() {
                         </div>
                       </>
                     ) : (
-                      <div className="text-slate-500">Sin datos de aseguradora cargados.</div>
+                      <div className="text-[var(--muted)]">Sin datos de aseguradora cargados.</div>
                     )}
                   </div>
                 </div>
               </div>
 
               {/* Assistant */}
-              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="bg-[var(--surface)] rounded-3xl border border-[var(--border)] shadow-sm overflow-hidden">
+                <div className="p-6 border-b border-[rgba(255,255,255,.10)] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div>
-                    <div className="text-xl font-black text-slate-900 flex items-center gap-2">
+                    <div className="text-xl font-black text-[var(--text)] flex items-center gap-2">
                       <Sparkles size={18} /> Asistente IA (OpenAI)
                     </div>
-                    <div className="text-sm text-slate-500">Responde como agente real y usa tus datos primero.</div>
+                    <div className="text-sm text-[var(--muted)]">Responde como agente real y usa tus datos primero.</div>
                   </div>
 
                   <div className="flex gap-2 flex-wrap justify-end">
                     <button
                       onClick={() => setVoiceOn((v) => !v)}
-                      className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black flex items-center gap-2"
+                      className="px-4 py-2 rounded-xl bg-[rgba(255,255,255,.06)] hover:bg-[rgba(255,255,255,.10)] text-[var(--text)] text-xs font-black flex items-center gap-2 border border-[rgba(255,255,255,.12)]"
                       title="Voz"
                     >
                       {voiceOn ? <Volume2 size={16} /> : <VolumeX size={16} />}
@@ -3815,7 +3815,7 @@ export default function App() {
 
                     <button
                       onClick={openSupport}
-                      className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-black flex items-center gap-2"
+                      className="px-4 py-2 rounded-xl bg-[var(--primary)] text-[#071018] text-xs font-black hover:bg-[var(--primaryHover)] flex items-center gap-2"
                     >
                       <MessageCircle size={16} /> Soporte
                     </button>
@@ -3825,7 +3825,7 @@ export default function App() {
                 <div className="relative">
                   <div
                     ref={chatBoxRef}
-                    className="h-[360px] sm:h-[420px] overflow-y-auto border-t border-slate-100 bg-slate-50 p-4"
+                    className="h-[360px] sm:h-[420px] overflow-y-auto border-t border-[rgba(255,255,255,.06)] bg-[rgba(255,255,255,.03)] p-4"
                     style={{ paddingBottom: "92px" }}
                   >
                     <div className="space-y-3">
@@ -3834,8 +3834,8 @@ export default function App() {
                           key={idx}
                           className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap ${
                             m.role === "user"
-                              ? "ml-auto bg-blue-600 text-white"
-                              : "mr-auto bg-white border border-slate-200 text-slate-700"
+                              ? "ml-auto bg-[var(--primary)] text-[#071018]"
+                              : "mr-auto bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] text-[var(--text)]"
                           }`}
                         >
                           {m.text}
@@ -3844,14 +3844,14 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-3">
+                  <div className="absolute bottom-0 left-0 right-0 bg-[rgba(10,16,24,.92)] border-t border-[rgba(255,255,255,.10)] p-3 backdrop-blur">
                     <div className="flex gap-2 items-center">
                       <button
                         onClick={startDictation}
                         className={`px-3 py-3 rounded-2xl border font-black text-xs flex items-center gap-2 ${
                           listening
-                            ? "bg-amber-50 border-amber-200 text-amber-800"
-                            : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+                            ? "bg-amber-500/15 border-amber-400/25 text-amber-200"
+                            : "bg-[rgba(255,255,255,.04)] border-[rgba(255,255,255,.12)] text-[var(--muted)] hover:bg-[rgba(255,255,255,.06)]"
                         }`}
                         title="Dictado"
                         type="button"
@@ -3869,19 +3869,19 @@ export default function App() {
                           }
                         }}
                         placeholder="Escribí tu consulta..."
-                        className="flex-1 px-4 py-3 border border-slate-300 rounded-2xl outline-none"
+                        className="flex-1 px-4 py-3 bg-[rgba(255,255,255,.04)] border border-[rgba(255,255,255,.12)] rounded-2xl outline-none text-[var(--text)] placeholder:text-[var(--muted)] focus-visible:ring-2 focus-visible:ring-[var(--focusRing)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
                       />
 
                       <button
                         onClick={clienteSend}
-                        className="px-5 py-3 rounded-2xl bg-blue-600 text-white text-xs font-black hover:bg-blue-700 flex items-center gap-2"
+                        className="px-5 py-3 rounded-2xl bg-[var(--primary)] text-[#071018] text-xs font-black hover:bg-[var(--primaryHover)] flex items-center gap-2"
                         type="button"
                       >
                         <Send size={16} /> Enviar
                       </button>
                     </div>
 
-                    <div className="mt-2 text-[11px] text-slate-500">
+                    <div className="mt-2 text-[11px] text-[var(--muted)]">
                       Conectado a OpenAI por backend. Si falta un dato de tu póliza, te lo va a decir.
                     </div>
                   </div>
