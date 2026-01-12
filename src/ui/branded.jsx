@@ -1,6 +1,6 @@
 import React from "react";
 
-export function cx(...parts) {
+function cx(...parts) {
   return parts.filter(Boolean).join(" ");
 }
 
